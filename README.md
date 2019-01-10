@@ -1,5 +1,10 @@
 # nMigen
 
+[![Build Status](https://travis-ci.org/peteut/nmigen.svg)](
+https://travis-ci.org/peteut/nmigen)
+[![Coverage Status](https://coveralls.io/repos/peteut/nmigen/badge.svg)](
+https://coveralls.io/r/peteut/nmigen)
+
 ## A refreshed Python toolbox for building complex digital hardware
 
 **nMigen is incomplete and undergoes rapid development. The nMigen documentation refers to features that may not be implemented yet and compatibility guarantees that may not hold yet. Use at your own risk.**
