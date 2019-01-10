@@ -1,4 +1,5 @@
+pbr
 coverage
 codecov
-pyvcd
 bitarray
+pytest
