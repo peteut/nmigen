@@ -237,6 +237,7 @@ class FragmentTransformer:
             self.map_named_ports(fragment, new_fragment)
         else:
             new_fragment = Fragment()
+            new_fragment.flatten = fragment.flatten
         self.map_ports(fragment, new_fragment)
         self.map_subfragments(fragment, new_fragment)
         self.map_domains(fragment, new_fragment)
@@ -292,6 +293,10 @@ class DomainLowerer(FragmentTransformer, ValueTransformer, StatementTransformer)
             raise DomainError("Signal {!r} refers to nonexistent domain '{}'"
                               .format(context, domain))
         return self.domains[domain]
+
+    def map_drivers(self, fragment, new_fragment):
+        for domain, signal in fragment.iter_drivers():
+            new_fragment.add_driver(self.on_value(signal), domain)
 
     def on_ClockSignal(self, value):
         cd = self._resolve(value.domain, value)
