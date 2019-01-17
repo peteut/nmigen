@@ -9,8 +9,9 @@ from ..tools import *
 
 
 __all__ = [
-    "Value", "Const", "C", "Operator", "Mux", "Part", "Slice", "Cat", "Repl",
+    "Value", "Const", "C", "AnyConst", "AnySeq", "Operator", "Mux", "Part", "Slice", "Cat", "Repl",
     "Array", "ArrayProxy",
+    "Sample", "Past", "Stable", "Rose", "Fell",
     "Signal", "ClockSignal", "ResetSignal",
     "Statement", "Assign", "Assert", "Assume", "Switch", "Delay", "Tick",
     "Passive", "ValueKey", "ValueDict", "ValueSet", "SignalKey", "SignalDict",
@@ -254,6 +255,32 @@ class Const(Value):
 C = Const  # shorthand
 
 
+class AnyValue(Value):
+    def __init__(self, shape):
+        super().__init__(src_loc_at=0)
+        if isinstance(shape, int):
+            shape = shape, False
+        self.nbits, self.signed = shape
+        if not isinstance(self.nbits, int) or self.nbits < 0:
+            raise TypeError("Width must be a non-negative integer, not '{!r}'", self.nbits)
+
+    def shape(self):
+        return self.nbits, self.signed
+
+    def _rhs_signals(self):
+        return ValueSet()
+
+
+class AnyConst(AnyValue):
+    def __repr__(self):
+        return "(anyconst {}'{})".format(self.nbits, "s" if self.signed else "")
+
+
+class AnySeq(AnyValue):
+    def __repr__(self):
+        return "(anyseq {}'{})".format(self.nbits, "s" if self.signed else "")
+
+
 class Operator(Value):
     def __init__(self, op, operands, src_loc_at=0):
         super().__init__(src_loc_at=1 + src_loc_at)
@@ -445,10 +472,10 @@ class Cat(Value):
         return sum(len(part) for part in self.parts), False
 
     def _lhs_signals(self):
-        return union(part._lhs_signals() for part in self.parts)
+        return union((part._lhs_signals() for part in self.parts), start=ValueSet())
 
     def _rhs_signals(self):
-        return union(part._rhs_signals() for part in self.parts)
+        return union((part._rhs_signals() for part in self.parts), start=ValueSet())
 
     def _as_const(self):
         value = 0
@@ -585,7 +612,7 @@ class Signal(Value, DUID):
         self.decoder = decoder
 
     @classmethod
-    def like(cls, other, src_loc_at=0, **kwargs):
+    def like(cls, other, name=None, src_loc_at=0, **kwargs):
         """Create Signal based on another.
 
         Parameters
@@ -593,8 +620,12 @@ class Signal(Value, DUID):
         other : Value
             Object to base this Signal on.
         """
-        kw = dict(shape=cls.wrap(other).shape(),
-                  name=tracer.get_var_name(depth=2 + src_loc_at))
+        if name is None:
+            try:
+                name = tracer.get_var_name(depth=2 + src_loc_at)
+            except tracer.NameNotFound:
+                name = "$like"
+        kw = dict(shape=cls.wrap(other).shape(), name=name)
         if isinstance(other, cls):
             kw.update(reset=other.reset, reset_less=other.reset_less,
                       attrs=other.attrs, decoder=other.decoder)
@@ -799,6 +830,52 @@ class ArrayProxy(Value):
 
     def __repr__(self):
         return "(proxy (array [{}]) {!r})".format(", ".join(map(repr, self.elems)), self.index)
+
+
+class Sample(Value):
+    """Value from the past.
+
+    A ``Sample`` of an expression is equal to the value of the expression ``clocks`` clock edges
+    of the ``domain`` clock back. If that moment is before the beginning of time, it is equal
+    to the value of the expression calculated as if each signal had its reset value.
+    """
+    def __init__(self, expr, clocks, domain):
+        super().__init__(src_loc_at=1)
+        self.value  = Value.wrap(expr)
+        self.clocks = int(clocks)
+        self.domain = domain
+        if not isinstance(self.value, (Const, Signal, ClockSignal, ResetSignal)):
+            raise TypeError("Sampled value may only be a signal or a constant, not {!r}"
+                            .format(self.value))
+        if self.clocks < 0:
+            raise ValueError("Cannot sample a value {} cycles in the future"
+                             .format(-self.clocks))
+
+    def shape(self):
+        return self.value.shape()
+
+    def _rhs_signals(self):
+        return ValueSet((self,))
+
+    def __repr__(self):
+        return "(sample {!r} @ {}[{}])".format(
+            self.value, "<default>" if self.domain is None else self.domain, self.clocks)
+
+
+def Past(expr, clocks=1, domain=None):
+    return Sample(expr, clocks, domain)
+
+
+def Stable(expr, clocks=0, domain=None):
+    return Sample(expr, clocks + 1, domain) == Sample(expr, clocks, domain)
+
+
+def Rose(expr, clocks=0, domain=None):
+    return ~Sample(expr, clocks + 1, domain) & Sample(expr, clocks, domain)
+
+
+def Fell(expr, clocks=0, domain=None):
+    return Sample(expr, clocks + 1, domain) & ~Sample(expr, clocks, domain)
 
 
 class _StatementList(list):
@@ -1058,6 +1135,8 @@ class ValueKey:
         elif isinstance(self.value, ArrayProxy):
             return hash((ValueKey(self.value.index),
                          tuple(ValueKey(e) for e in self.value._iter_as_values())))
+        elif isinstance(self.value, Sample):
+            return hash((ValueKey(self.value.value), self.value.clocks, self.value.domain))
         else: # :nocov:
             raise TypeError("Object '{!r}' cannot be used as a key in value collections"
                             .format(self.value))
@@ -1096,6 +1175,10 @@ class ValueKey:
                     all(ValueKey(a) == ValueKey(b)
                         for a, b in zip(self.value._iter_as_values(),
                                         other.value._iter_as_values())))
+        elif isinstance(self.value, Sample):
+            return (ValueKey(self.value.value) == ValueKey(other.value.value) and
+                    self.value.clocks == other.value.clocks and
+                    self.value.domain == self.value.domain)
         else: # :nocov:
             raise TypeError("Object '{!r}' cannot be used as a key in value collections"
                             .format(self.value))

@@ -7,6 +7,9 @@ from ..tools import bits_for
 from ..hdl import ast, ir, mem, xfrm
 
 
+__all__ = ["convert"]
+
+
 class _Namer:
     def __init__(self):
         super().__init__()
@@ -259,7 +262,7 @@ class _ValueCompilerState:
                                     port_id=port_id, port_kind=port_kind,
                                     src=src(signal.src_loc))
         if signal in self.driven:
-            wire_next = self.rtlil.wire(width=signal.nbits, name=wire_curr + "$next",
+            wire_next = self.rtlil.wire(width=signal.nbits, name="$next" + wire_curr,
                                         src=src(signal.src_loc))
         else:
             wire_next = None
@@ -303,6 +306,9 @@ class _ValueCompiler(xfrm.ValueVisitor):
         raise NotImplementedError # :nocov:
 
     def on_ResetSignal(self, value):
+        raise NotImplementedError # :nocov:
+
+    def on_Sample(self, value):
         raise NotImplementedError # :nocov:
 
     def on_Record(self, value):
@@ -369,6 +375,26 @@ class _RHSValueCompiler(_ValueCompiler):
         else:
             value_twos_compl = value.value & ((1 << value.nbits) - 1)
             return "{}'{:0{}b}".format(value.nbits, value_twos_compl, value.nbits)
+
+    def on_AnyConst(self, value):
+        res_bits, res_sign = value.shape()
+        res = self.s.rtlil.wire(width=res_bits)
+        self.s.rtlil.cell("$anyconst", ports={
+            "\\Y": res,
+        }, params={
+            "WIDTH": res_bits,
+        }, src=src(value.src_loc))
+        return res
+
+    def on_AnySeq(self, value):
+        res_bits, res_sign = value.shape()
+        res = self.s.rtlil.wire(width=res_bits)
+        self.s.rtlil.cell("$anyseq", ports={
+            "\\Y": res,
+        }, params={
+            "WIDTH": res_bits,
+        }, src=src(value.src_loc))
+        return res
 
     def on_Signal(self, value):
         wire_curr, wire_next = self.s.resolve(value)
@@ -501,6 +527,12 @@ class _RHSValueCompiler(_ValueCompiler):
 
 class _LHSValueCompiler(_ValueCompiler):
     def on_Const(self, value):
+        raise TypeError # :nocov:
+
+    def on_AnyConst(self, value):
+        raise TypeError # :nocov:
+
+    def on_AnySeq(self, value):
         raise TypeError # :nocov:
 
     def on_Operator(self, value):
@@ -641,7 +673,7 @@ def convert_fragment(builder, fragment, name, top):
         verilog_trigger_sync_emitted = False
 
         # Register all signals driven in the current fragment. This must be done first, as it
-        # affects further codegen; e.g. whether sig$next signals will be generated and used.
+        # affects further codegen; e.g. whether $next\sig signals will be generated and used.
         for domain, signal in fragment.iter_drivers():
             compiler_state.add_driven(signal, sync=domain is not None)
 
@@ -725,8 +757,8 @@ def convert_fragment(builder, fragment, name, top):
 
             with module.process(name="$group_{}".format(group)) as process:
                 with process.case() as case:
-                    # For every signal in comb domain, assign \sig$next to the reset value.
-                    # For every signal in sync domains, assign \sig$next to the current
+                    # For every signal in comb domain, assign $next\sig to the reset value.
+                    # For every signal in sync domains, assign $next\sig to the current
                     # value (\sig).
                     for domain, signal in fragment.iter_drivers():
                         if signal not in group_signals:
@@ -768,7 +800,7 @@ def convert_fragment(builder, fragment, name, top):
                         sync.update(verilog_trigger, "1'0")
                         verilog_trigger_sync_emitted = True
 
-                # For every signal in every domain, assign \sig to \sig$next. The sensitivity list,
+                # For every signal in every domain, assign \sig to $next\sig. The sensitivity list,
                 # however, differs between domains: for comb domains, it is `always`, for sync
                 # domains with sync reset, it is `posedge clk`, for sync domains with async reset
                 # it is `posedge clk or posedge rst`.
