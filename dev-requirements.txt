@@ -1,5 +1,4 @@
 pbr
 coverage
-codecov
 bitarray
 pytest
