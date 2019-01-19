@@ -190,18 +190,21 @@ class StatementVisitor(metaclass=ABCMeta):
 
     def on_statement(self, stmt):
         if type(stmt) is Assign:
-            return self.on_Assign(stmt)
+            new_stmt = self.on_Assign(stmt)
         elif type(stmt) is Assert:
-            return self.on_Assert(stmt)
+            new_stmt = self.on_Assert(stmt)
         elif type(stmt) is Assume:
-            return self.on_Assume(stmt)
+            new_stmt = self.on_Assume(stmt)
         elif isinstance(stmt, Switch):
             # Uses `isinstance()` and not `type() is` because nmigen.compat requires it.
-            return self.on_Switch(stmt)
+            new_stmt = self.on_Switch(stmt)
         elif isinstance(stmt, Iterable):
-            return self.on_statements(stmt)
+            new_stmt = self.on_statements(stmt)
         else:
-            return self.on_unknown_statement(stmt)
+            new_stmt = self.on_unknown_statement(stmt)
+        if hasattr(stmt, "src_loc") and hasattr(new_stmt, "src_loc"):
+            new_stmt.src_loc = stmt.src_loc
+        return new_stmt
 
     def __call__(self, value):
         return self.on_statement(value)
@@ -382,6 +385,7 @@ class SampleLowerer(FragmentTransformer, ValueTransformer, StatementTransformer)
             sampled_name, sampled_reset = self._name_reset(value.value)
             name = "$sample${}${}${}".format(sampled_name, value.domain, value.clocks)
             sample = Signal.like(value.value, name=name, reset_less=True, reset=sampled_reset)
+            sample.attrs["nmigen.sample_reg"] = True
 
             prev_sample = self.on_Sample(Sample(value.value, value.clocks - 1, value.domain))
             if value.domain not in self.sample_stmts:

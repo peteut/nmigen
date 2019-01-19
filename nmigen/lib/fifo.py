@@ -63,11 +63,10 @@ class FIFOInterface:
     def read(self):
         """Read method for simulation."""
         assert (yield self.readable)
-        value = (yield self.dout)
         yield self.re.eq(1)
         yield
+        value = (yield self.dout)
         yield self.re.eq(0)
-        yield
         return value
 
     def write(self, data):
@@ -77,7 +76,6 @@ class FIFOInterface:
         yield self.we.eq(1)
         yield
         yield self.we.eq(0)
-        yield
 
 
 def _incr(signal, modulo):
@@ -173,16 +171,31 @@ class SyncFIFO(FIFOInterface):
             m.d.sync += self.level.eq(self.level - 1)
 
         if platform == "formal":
-            m.d.comb += [
-                Assert(produce < self.depth),
-                Assert(consume < self.depth),
-            ]
-            with m.If(produce == consume):
-                m.d.comb += Assert((self.level == 0) | (self.level == self.depth))
-            with m.If(produce > consume):
-                m.d.comb += Assert(self.level == (produce - consume))
-            with m.If(produce < consume):
-                m.d.comb += Assert(self.level == (self.depth + produce - consume))
+            # TODO: move this logic to SymbiYosys
+            initstate = Signal()
+            m.submodules += Instance("$initstate", o_Y=initstate)
+            with m.If(initstate):
+                m.d.comb += [
+                    Assume(produce < self.depth),
+                    Assume(consume < self.depth),
+                ]
+                with m.If(produce == consume):
+                    m.d.comb += Assume((self.level == 0) | (self.level == self.depth))
+                with m.If(produce > consume):
+                    m.d.comb += Assume(self.level == (produce - consume))
+                with m.If(produce < consume):
+                    m.d.comb += Assume(self.level == (self.depth + produce - consume))
+            with m.Else():
+                m.d.comb += [
+                    Assert(produce < self.depth),
+                    Assert(consume < self.depth),
+                ]
+                with m.If(produce == consume):
+                    m.d.comb += Assert((self.level == 0) | (self.level == self.depth))
+                with m.If(produce > consume):
+                    m.d.comb += Assert(self.level == (produce - consume))
+                with m.If(produce < consume):
+                    m.d.comb += Assert(self.level == (self.depth + produce - consume))
 
         return m.lower(platform)
 

@@ -134,6 +134,16 @@ class Value(metaclass=ABCMeta):
         """
         return Operator("b", [self])
 
+    def implies(premise, conclusion):
+        """Implication.
+
+        Returns
+        -------
+        Value, out
+            ``0`` if ``premise`` is true and ``conclusion`` is not, ``1`` otherwise.
+        """
+        return ~premise | conclusion
+
     def part(self, offset, width):
         """Indexed part-select.
 
@@ -255,7 +265,7 @@ class Const(Value):
 C = Const  # shorthand
 
 
-class AnyValue(Value):
+class AnyValue(Value, DUID):
     def __init__(self, shape):
         super().__init__(src_loc_at=0)
         if isinstance(shape, int):
@@ -331,6 +341,8 @@ class Operator(Value):
                     return a_bits + b_bits - 1, True
                 # one operand signed, the other unsigned (add sign bit)
                 return a_bits + b_bits + 1 - 1, True
+            if self.op == "%":
+                return a_bits, a_sign
             if self.op in ("<", "<=", "==", "!=", ">", ">=", "b"):
                 return 1, False
             if self.op in ("&", "^", "|"):
@@ -910,19 +922,21 @@ class Assign(Statement):
         return "(eq {!r} {!r})".format(self.lhs, self.rhs)
 
 
-class Assert(Statement):
+class Property(Statement):
     def __init__(self, test, _check=None, _en=None):
+        self.src_loc = tracer.get_src_loc()
+
         self.test = Value.wrap(test)
 
         self._check = _check
         if self._check is None:
-            self._check = Signal(reset_less=True, name="$assert$check")
-            self._check.src_loc = self.test.src_loc
+            self._check = Signal(reset_less=True, name="${}$check".format(self._kind))
+            self._check.src_loc = self.src_loc
 
         self._en = _en
         if _en is None:
-            self._en = Signal(reset_less=True, name="$assert$en")
-            self._en.src_loc = self.test.src_loc
+            self._en = Signal(reset_less=True, name="${}$en".format(self._kind))
+            self._en.src_loc = self.src_loc
 
     def _lhs_signals(self):
         return ValueSet((self._en, self._check))
@@ -931,31 +945,15 @@ class Assert(Statement):
         return self.test._rhs_signals()
 
     def __repr__(self):
-        return "(assert {!r})".format(self.test)
+        return "({} {!r})".format(self._kind, self.test)
 
 
-class Assume(Statement):
-    def __init__(self, test, _check=None, _en=None):
-        self.test = Value.wrap(test)
+class Assert(Property):
+    _kind = "assert"
 
-        self._check = _check
-        if self._check is None:
-            self._check = Signal(reset_less=True, name="$assume$check")
-            self._check.src_loc = self.test.src_loc
 
-        self._en = _en
-        if self._en is None:
-            self._en = Signal(reset_less=True, name="$assume$en")
-            self._en.src_loc = self.test.src_loc
-
-    def _lhs_signals(self):
-        return ValueSet((self._en, self._check))
-
-    def _rhs_signals(self):
-        return self.test._rhs_signals()
-
-    def __repr__(self):
-        return "(assume {!r})".format(self.test)
+class Assume(Property):
+    _kind = "assume"
 
 
 class Switch(Statement):
@@ -1119,7 +1117,7 @@ class ValueKey:
     def __hash__(self):
         if isinstance(self.value, Const):
             return hash(self.value.value)
-        elif isinstance(self.value, Signal):
+        elif isinstance(self.value, (Signal, AnyValue)):
             return hash(self.value.duid)
         elif isinstance(self.value, (ClockSignal, ResetSignal)):
             return hash(self.value.domain)
@@ -1149,7 +1147,7 @@ class ValueKey:
 
         if isinstance(self.value, Const):
             return self.value.value == other.value.value
-        elif isinstance(self.value, Signal):
+        elif isinstance(self.value, (Signal, AnyValue)):
             return self.value is other.value
         elif isinstance(self.value, (ClockSignal, ResetSignal)):
             return self.value.domain == other.value.domain
@@ -1191,7 +1189,7 @@ class ValueKey:
 
         if isinstance(self.value, Const):
             return self.value < other.value
-        elif isinstance(self.value, Signal):
+        elif isinstance(self.value, (Signal, AnyValue)):
             return self.value.duid < other.value.duid
         elif isinstance(self.value, Slice):
             return (ValueKey(self.value.value) < ValueKey(other.value.value) and
