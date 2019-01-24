@@ -1,8 +1,9 @@
 from abc import ABCMeta, abstractmethod
-from typing import List
+from typing import List, Tuple, Dict, Union, NamedTuple
 from operator import methodcaller
 
-__all__ = ["Constraint", "Pins", "IOStandard", "Drive", "Misc", "Subsignal"]
+__all__ = ["Constraint", "Pins", "IOStandard", "Drive", "Misc", "Subsignal",
+           "Connector"]
 
 
 class Constraint(metaclass=ABCMeta):
@@ -71,3 +72,20 @@ class Subsignal(Constraint):
     def __repr__(self):
         return "{0._cls_name}('{0.name}', {1})".format(
             self, ", ".join(map(repr, self.constraints)))
+
+
+connector_decl = Union[Tuple[str, str], Dict[str, str]]
+
+
+class Connector(NamedTuple):
+    name: str
+    pins: Dict[Union[int, str], Pins]
+
+    @staticmethod
+    def make(definition: connector_decl) -> "Connector":
+        name, pins = definition
+        return Connector(
+            name=name, pins={k: Pins(v) for k, v in pins.items()}
+            if isinstance(pins, Dict) else {0: Pins(pins)}
+            if isinstance(pins, str) else {
+                k: Pins(v) for k, v in enumerate(pins)})

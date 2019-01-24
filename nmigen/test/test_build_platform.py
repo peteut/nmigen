@@ -31,3 +31,21 @@ class ConstraintTestCase(unittest.TestCase):
                          "Subsignal('foo', {!r})".format(Pins("1 2 3")))
         self.assertEqual(hash(Subsignal("foo",  Pins(" 1 2 3  "))),
                          hash(Subsignal("foo", Pins("1 2 3"))))
+
+
+class ConnectorTestCase(unittest.TestCase):
+    def test_make(self):
+        self.assertIsInstance(Connector.make(("x", "1 2 3")), Connector)
+        self.assertIsInstance(Connector.make(("x", [("1 2 3"), ("3 4 5")])),
+                              Connector)
+        self.assertIsInstance(Connector.make(("x", {"Pin1": "1"})), Connector)
+
+    def test_getitem(self):
+        self.assertEqual(
+            hash(Connector.make(("x", "1 2 3")).pins[0]), hash(Pins("1 2 3")))
+        self.assertEqual(
+            hash(Connector.make(("x", [("1 2 3"), ("4 5 6")])).pins[1]),
+            hash(Pins("4 5 6")))
+        self.assertEqual(
+            hash(Connector.make(("x", {"Pin1": "1"})).pins["Pin1"]),
+            hash(Pins("1")))
