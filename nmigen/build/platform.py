@@ -8,6 +8,7 @@ from functools import reduce
 from typing import *  # noqa
 from operator import methodcaller
 from edalize import get_edatool
+from ..hdl.ast import Signal
 
 
 __all__ = ["Constraint", "Pins", "IOStandard", "Drive", "Misc", "Subsignal",
@@ -33,7 +34,7 @@ class Constraint(Hashable, metaclass=ABCMeta):
 split = methodcaller("split")
 
 
-class Pins(Constraint):
+class Pins(Constraint, Sized):
     __slots__ = ("identifiers",)
 
     def __init__(self, *identifiers: List[str]) -> None:
@@ -41,6 +42,9 @@ class Pins(Constraint):
 
     def __repr__(self):
         return "{._cls_name}('{}')".format(self, " ".join(*self.identifiers))
+
+    def __len__(self):
+        return len(self.identifiers)
 
 
 class IOStandard(Constraint):
@@ -102,6 +106,10 @@ class Connector(NamedTuple):
                 k: Pins(v) for k, v in enumerate(pins)})
 
 
+def ispins(x):
+    return isinstance(x, Pins)
+
+
 def issubsignal(x):
     return isinstance(x, Subsignal)
 
@@ -151,8 +159,36 @@ class EdalizeApi(NamedTuple):
     toplevel: str
 
 
+class Port:
+    name: str
+    io: IOProxy
+
+    def __init__(self, name: str, io: IOProxy) -> None:
+        self.name = name
+        self.io = io
+
+    def _get(self, key) -> Union["Port", Signal]:
+        name = key if self.name == "" else "_".join([self.name, str(key)])
+        port = Port(name, self.io.items[key])
+        if isinstance(port.io, set):
+            pins = next(filter(ispins, port.io))
+            sig = Signal(len(pins), name=name, attrs={
+                repr(a): a for a in port.io})
+            return sig
+        return port
+
+    def __getitem__(self, key):
+        return self._get(key)
+
+    def __getattr__(self, key):
+        try:
+            return self._get(key)
+        except KeyError:
+            return super().__getattr__(key)
+
+
 class Platform(NamedTuple):
-    io: Dict[str, IOProxy]
+    io: IOProxy
     connector: Set[Connector]
     name: str
     parameters: Dict[str, Dict[str, str]] = {}
@@ -163,6 +199,10 @@ class Platform(NamedTuple):
              connector: Iterable[Connector] = []) -> "Platform":
         io_proxy = reduce(IOProxy.make, io, IOProxy())
         return Platform(name=name.lower(), io=io_proxy, connector=connector)
+
+    @property
+    def port(self) -> Port:
+        return Port("", self.io)
 
 
 def get_eda_api(plat: Platform,

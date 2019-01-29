@@ -1,7 +1,8 @@
 import unittest
 import functools
 from ..build.platform import *
-from ..build.platform import IOProxy
+from ..build.platform import IOProxy, Port
+from ..hdl.ast import Signal
 
 __all__ = ["ConstraintTestCase"]
 
@@ -52,26 +53,19 @@ class ConnectorTestCase(unittest.TestCase):
             Connector.make(("x", {"Pin1": "1"})).pins["Pin1"], Pins("1"))
 
 
-class PlatfromTestCase(unittest.TestCase):
-    def test_get_vivado(self):
-        plat = Platform.make("name", [])._asdict()
-        plat["files"] += ["top.v"]
-        backend = get_vivado(Platform(**plat))
-        backend.configure([])
-        self.assertTrue(get_vivado(Platform(**plat)))
+_io = [
+    ("io0", 0, Pins("1"), Misc("foo")),
+    ("io0", 1, Pins("2")),
+    ("io1", Pins("3")),
+    ("io2",
+     Subsignal("sub", Pins("4"), Misc("foobar")),
+     Subsignal("sub2", Pins("5")),
+     IOStandard("CMOS"))]
 
 
 class IOProxyTestCase(unittest.TestCase):
     def test_reduce_list(self):
-        dut = functools.reduce(IOProxy.make, [
-            ("io0", 0, Pins("1"), Misc("foo")),
-            ("io0", 1, Pins("2")),
-            ("io1", Pins("3")),
-            ("io2",
-             Subsignal("sub", Pins("4"), Misc("foobar")),
-             Subsignal("sub2", Pins("5")),
-             IOStandard("CMOS")),
-        ], IOProxy())
+        dut = functools.reduce(IOProxy.make, _io, IOProxy())
         self.assertEqual(set([Pins("1"), Misc("foo")]), dut.items["io0"].items[0])
         self.assertEqual(set([Pins("2")]), dut.items["io0"].items[1])
         self.assertEqual(set([Pins("3")]), dut.items["io1"])
@@ -81,3 +75,21 @@ class IOProxyTestCase(unittest.TestCase):
         self.assertEqual(
             set([Pins("5"), IOStandard("CMOS")]),
             dut.items["io2"].items["sub2"])
+
+
+class PlatfromTestCase(unittest.TestCase):
+    def test_get_vivado(self):
+        plat = Platform.make("name", _io)._asdict()
+        plat["files"] += ["top.v"]
+        backend = get_vivado(Platform(**plat))
+        backend.configure([])
+        self.assertTrue(get_vivado(Platform(**plat)))
+
+    def test_port(self):
+        plat = Platform.make("name", _io)
+        self.assertIsInstance(plat.port, Port)
+        self.assertEqual(plat.port.name, "")
+        self.assertEqual(plat.port.io0.name, "io0")
+        self.assertIsInstance(plat.port.io0[0], Signal)
+        self.assertEqual(plat.port.io0[0].name, "io0_0")
+        self.assertEqual(len(plat.port.io0[0]), 1)
