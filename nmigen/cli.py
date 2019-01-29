@@ -67,7 +67,6 @@ def fragment_info(fragment: Fragment) -> str:
 
 def main_runner(parser, args, design, platform=None, name="top", ports=()):
     logger.setLevel(max(logging.ERROR - args.verbose * 10, logging.DEBUG))
-    logger.info("log level is {}".format(logger.getEffectiveLevel()))
     if args.action == "generate":
         fragment = Fragment.get(design, platform)
         generate_type = args.generate_type
