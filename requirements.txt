@@ -1,2 +1,3 @@
 pyvcd>=0.1.4
 bitarray
+git+https://github.com/olofk/edalize.git#egg=edalize

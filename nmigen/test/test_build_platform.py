@@ -1,5 +1,7 @@
-from ..build.platform import *
 import unittest
+import functools
+from ..build.platform import *
+from ..build.platform import IOProxy
 
 __all__ = ["ConstraintTestCase"]
 
@@ -48,3 +50,34 @@ class ConnectorTestCase(unittest.TestCase):
             Pins("4 5 6"))
         self.assertEqual(
             Connector.make(("x", {"Pin1": "1"})).pins["Pin1"], Pins("1"))
+
+
+class PlatfromTestCase(unittest.TestCase):
+    def test_get_vivado(self):
+        plat = Platform.make("name", [])._asdict()
+        plat["files"] += ["top.v"]
+        backend = get_vivado(Platform(**plat))
+        backend.configure([])
+        self.assertTrue(get_vivado(Platform(**plat)))
+
+
+class IOProxyTestCase(unittest.TestCase):
+    def test_reduce_list(self):
+        dut = functools.reduce(IOProxy.make, [
+            ("io0", 0, Pins("1"), Misc("foo")),
+            ("io0", 1, Pins("2")),
+            ("io1", Pins("3")),
+            ("io2",
+             Subsignal("sub", Pins("4"), Misc("foobar")),
+             Subsignal("sub2", Pins("5")),
+             IOStandard("CMOS")),
+        ], IOProxy())
+        self.assertEqual(set([Pins("1"), Misc("foo")]), dut.items["io0"].items[0])
+        self.assertEqual(set([Pins("2")]), dut.items["io0"].items[1])
+        self.assertEqual(set([Pins("3")]), dut.items["io1"])
+        self.assertEqual(
+            set([Pins("4"), Misc("foobar"), IOStandard("CMOS")]),
+            dut.items["io2"].items["sub"])
+        self.assertEqual(
+            set([Pins("5"), IOStandard("CMOS")]),
+            dut.items["io2"].items["sub2"])
