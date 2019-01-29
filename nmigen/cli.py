@@ -69,8 +69,7 @@ def main_runner(parser, args, design, platform=None, name="top", ports=()):
     logger.setLevel(max(logging.ERROR - args.verbose * 10, logging.DEBUG))
     logger.info("log level is {}".format(logger.getEffectiveLevel()))
     if args.action == "generate":
-        fragment = design.get_fragment(platform=platform)
-
+        fragment = Fragment.get(design, platform)
         generate_type = args.generate_type
         if generate_type is None and args.generate_file:
             if args.generate_file.name.endswith(".v"):
@@ -90,7 +89,7 @@ def main_runner(parser, args, design, platform=None, name="top", ports=()):
         logger.info(fragment_info(fragment.prepare()))
 
     if args.action == "simulate":
-        fragment = design.get_fragment(platform=platform)
+        fragment = Fragment.get(design, platform)
         with pysim.Simulator(fragment,
                 vcd_file=args.vcd_file,
                 gtkw_file=args.gtkw_file,

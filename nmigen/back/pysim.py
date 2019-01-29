@@ -347,7 +347,7 @@ class _StatementCompiler(StatementVisitor):
 
 class Simulator:
     def __init__(self, fragment, vcd_file=None, gtkw_file=None, traces=()):
-        self._fragment        = fragment
+        self._fragment        = Fragment.get(fragment, platform=None)
 
         self._signal_slots    = SignalDict()  # Signal -> int/slot
         self._slot_signals    = list()        # int/slot -> Signal
@@ -386,9 +386,6 @@ class Simulator:
 
         self._run_called      = False
 
-        while not isinstance(self._fragment, Fragment):
-            self._fragment = self._fragment.get_fragment(platform=None)
-
     @staticmethod
     def _check_process(process):
         if inspect.isgeneratorfunction(process):
@@ -414,13 +411,13 @@ class Simulator:
         process = self._check_process(process)
         def sync_process():
             try:
-                result = None
+                cmd = None
                 while True:
-                    self._process_loc[sync_process] = self._name_process(process)
-                    cmd = process.send(result)
                     if cmd is None:
                         cmd = Tick(domain)
                     result = yield cmd
+                    self._process_loc[sync_process] = self._name_process(process)
+                    cmd = process.send(result)
             except StopIteration:
                 pass
         sync_process = sync_process()
@@ -457,7 +454,7 @@ class Simulator:
             hierarchy[fragment] = scope
             for index, (subfragment, name) in enumerate(fragment.subfragments):
                 if name is None:
-                    add_fragment(subfragment, (*scope, "#{}".format(index)))
+                    add_fragment(subfragment, (*scope, "U{}".format(index)))
                 else:
                     add_fragment(subfragment, (*scope, name))
         add_fragment(root_fragment, scope=("top",))
@@ -507,9 +504,9 @@ class Simulator:
 
                 signal_slot = self._signal_slots[signal]
 
-                for subfragment, name in fragment.subfragments:
+                for i, (subfragment, name) in enumerate(fragment.subfragments):
                     if signal in subfragment.ports:
-                        var_name = "{}_{}".format(name, signal.name)
+                        var_name = "{}_{}".format(name or "U{}".format(i), signal.name)
                         break
                 else:
                     var_name = signal.name
@@ -553,10 +550,21 @@ class Simulator:
                     self._domain_signals[domain] |= signals_bits
 
             statements = []
-            for signal in fragment.iter_comb():
-                statements.append(signal.eq(signal.reset))
-            for domain, signal in fragment.iter_sync():
-                statements.append(signal.eq(signal))
+            for domain, signals in fragment.drivers.items():
+                reset_stmts = []
+                hold_stmts  = []
+                for signal in signals:
+                    reset_stmts.append(signal.eq(signal.reset))
+                    hold_stmts .append(signal.eq(signal))
+
+                if domain is None:
+                    statements += reset_stmts
+                else:
+                    if self._domains[domain].async_reset:
+                        statements.append(Switch(self._domains[domain].rst,
+                            {0: hold_stmts, 1: reset_stmts}))
+                    else:
+                        statements += hold_stmts
             statements += fragment.statements
 
             compiler = _StatementCompiler(self._signal_slots)

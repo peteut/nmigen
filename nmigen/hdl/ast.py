@@ -333,14 +333,7 @@ class Operator(Value):
                 bits, sign = self._bitwise_binary_shape(*op_shapes)
                 return bits + 1, sign
             if self.op == "*":
-                if not a_sign and not b_sign:
-                    # both operands unsigned
-                    return a_bits + b_bits, False
-                if a_sign and b_sign:
-                    # both operands signed
-                    return a_bits + b_bits - 1, True
-                # one operand signed, the other unsigned (add sign bit)
-                return a_bits + b_bits + 1 - 1, True
+                return a_bits + b_bits, a_sign or b_sign
             if self.op == "%":
                 return a_bits, a_sign
             if self.op in ("<", "<=", "==", "!=", ">", ">=", "b"):
@@ -1129,7 +1122,7 @@ class ValueKey:
             return hash((ValueKey(self.value.value), ValueKey(self.value.offset),
                          self.value.width))
         elif isinstance(self.value, Cat):
-            return hash(tuple(ValueKey(o) for o in self.value.operands))
+            return hash(tuple(ValueKey(o) for o in self.value.parts))
         elif isinstance(self.value, ArrayProxy):
             return hash((ValueKey(self.value.index),
                          tuple(ValueKey(e) for e in self.value._iter_as_values())))
@@ -1166,7 +1159,7 @@ class ValueKey:
                     self.value.width == other.value.width)
         elif isinstance(self.value, Cat):
             return all(ValueKey(a) == ValueKey(b)
-                        for a, b in zip(self.value.operands, other.value.operands))
+                        for a, b in zip(self.value.parts, other.value.parts))
         elif isinstance(self.value, ArrayProxy):
             return (ValueKey(self.value.index) == ValueKey(other.value.index) and
                     len(self.value.elems) == len(other.value.elems) and

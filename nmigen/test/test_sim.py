@@ -238,7 +238,7 @@ class SimulatorUnitTestCase(FHDLTestCase):
 class SimulatorIntegrationTestCase(FHDLTestCase):
     @contextmanager
     def assertSimulation(self, module, deadline=None):
-        with Simulator(module.lower(platform=None)) as sim:
+        with Simulator(module.elaborate(platform=None)) as sim:
             yield sim
             if deadline is None:
                 sim.run()
@@ -279,9 +279,6 @@ class SimulatorIntegrationTestCase(FHDLTestCase):
         with self.assertSimulation(self.m) as sim:
             sim.add_clock(1e-6, domain="sync")
             def process():
-                self.assertEqual((yield self.count), 4)
-                self.assertEqual((yield self.sync.clk), 0)
-                yield
                 self.assertEqual((yield self.count), 4)
                 self.assertEqual((yield self.sync.clk), 1)
                 yield

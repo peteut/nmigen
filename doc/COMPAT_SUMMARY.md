@@ -173,8 +173,8 @@ Compatibility summary
       - (−) `layout_get` **brk**
       - (−) `layout_partial` **brk**
       - (−) `Record` id
-    - (−) `resetsync` ?
-      - (−) `AsyncResetSynchronizer` ?
+    - (+) `resetsync` ?
+      - (+) `AsyncResetSynchronizer` **obs** → `.lib.cdc.ResetSynchronizer`
     - (−) `roundrobin` ?
       - (−) `SP_WITHDRAW`/`SP_CE` ?
       - (−) `RoundRobin` ?
@@ -185,8 +185,8 @@ Compatibility summary
     - (⊙) `core` **brk**
     - (⊙) `vcd` **brk** → `vcd`
     - (⊙) `Simulator` **brk**
-    - (+) `run_simulation` **obs** → `.back.pysim.Simulator`
-    - (−) `passive` **obs** → `.hdl.ast.Passive`
+    - (⊕) `run_simulation` **obs** → `.back.pysim.Simulator`
+    - (⊕) `passive` **obs** → `.hdl.ast.Passive`
   - (−) `build` ?
   - (+) `util` **obs**
     - (+) `misc` ⇒ `.tools`
