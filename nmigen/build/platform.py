@@ -1,12 +1,12 @@
 from abc import ABCMeta, abstractmethod
-from typing import List, Tuple, Dict, Union, NamedTuple
+from typing import *  # noqa
 from operator import methodcaller
 
 __all__ = ["Constraint", "Pins", "IOStandard", "Drive", "Misc", "Subsignal",
            "Connector"]
 
 
-class Constraint(metaclass=ABCMeta):
+class Constraint(Hashable, metaclass=ABCMeta):
     @abstractmethod
     def __repr__(self) -> str:
         pass
@@ -17,6 +17,9 @@ class Constraint(metaclass=ABCMeta):
 
     def __hash__(self) -> int:
         return hash(repr(self))
+
+    def __eq__(self, other):
+        return hash(self) == hash(other)
 
 
 split = methodcaller("split")
