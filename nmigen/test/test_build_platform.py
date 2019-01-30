@@ -13,20 +13,48 @@ class ConstraintTestCase(unittest.TestCase):
         self.assertEqual(repr(Pins("1  2  3")), "Pins('1 2 3')")
         self.assertEqual(Pins("1 "), Pins(" 1 "))
 
+    def test_pins_xdc(self):
+        self.assertEqual(
+"""set_property PACKAGE_PIN B26 [get_ports CLK]
+""",
+            Pins("B26").get_xdc("CLK"))
+        self.assertEqual(
+"""set_property PACKAGE_PIN B26 [get_ports CLKS[0]]
+set_property PACKAGE_PIN B28 [get_ports CLKS[1]]
+""",
+            Pins("B26 B28").get_xdc("CLKS"))
+
     def test_iostandard(self):
         self.assertIsInstance(IOStandard("CMOS"), Constraint)
         self.assertEqual(repr(IOStandard("CMOS")), "IOStandard('CMOS')")
         self.assertEqual(IOStandard("CMOS"), IOStandard("CMOS"))
 
+    def test_iostandard_xdc(self):
+        self.assertEqual(
+"""set_property IOSTANDARD LVCMOS12 [get_ports STATUS]
+""",
+            IOStandard("LVCMOS12").get_xdc("STATUS"))
+
     def test_drive(self):
-        self.assertIsInstance(Drive("high"), Constraint)
-        self.assertEqual(repr(Drive("  high ")), "Drive('high')")
-        self.assertEqual(Drive("high"), Drive(" high "))
+        self.assertIsInstance(Drive(1), Constraint)
+        self.assertEqual(repr(Drive(1)), "Drive(1)")
+
+    def test_drive_xdc(self):
+        self.assertEqual(
+"""set_property DRIVE 2 [get_ports STATUS]
+""",
+            Drive(2).get_xdc("STATUS"))
 
     def test_misc(self):
         self.assertIsInstance(Misc("misc"), Constraint)
         self.assertEqual(repr(Misc("  misc ")), "Misc('misc')")
         self.assertEqual(Misc("misc"), Misc(" misc "))
+
+    def test_misc_xdc(self):
+        self.assertEqual(
+"""set_property MISC value [get_ports STATUS]
+""",
+            Misc("MISC=value").get_xdc("STATUS"))
 
     def test_subsignal(self):
         self.assertIsInstance(Subsignal("foo", Pins("1")), Constraint)
@@ -34,6 +62,10 @@ class ConstraintTestCase(unittest.TestCase):
                          "Subsignal('foo', {!r})".format(Pins("1 2 3")))
         self.assertEqual(Subsignal("foo", Pins(" 1 2 3  ")),
                          Subsignal("foo", Pins("1 2 3")))
+
+    def test_subsignal_xdc(self):
+        with self.assertRaises(NotImplementedError):
+            Subsignal("foo").get_xdc("FOO")
 
 
 class ConnectorTestCase(unittest.TestCase):

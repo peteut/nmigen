@@ -1,12 +1,13 @@
 from abc import ABCMeta, abstractmethod
 from collections import Iterable
-from itertools import filterfalse, chain
+from itertools import filterfalse, chain, starmap, count
 from operator import or_
 from copy import copy
 import os
-from functools import reduce
+from functools import reduce, partial
 from typing import *  # noqa
 from operator import methodcaller
+from string import Template
 from edalize import get_edatool
 from ..hdl.ast import Signal
 
@@ -20,6 +21,10 @@ class Constraint(Hashable, metaclass=ABCMeta):
     def __repr__(self) -> str:
         pass
 
+    @abstractmethod
+    def get_xdc(self, name: str) -> str:
+        pass
+
     @property
     def _cls_name(self) -> str:
         return self.__class__.__name__
@@ -31,24 +36,44 @@ class Constraint(Hashable, metaclass=ABCMeta):
         return hash(self) == hash(other)
 
 
+def isconstraint(x: Any) -> bool:
+    return isinstance(x, Constraint)
+
+
 split = methodcaller("split")
 
 
 class Pins(Constraint, Sized):
     __slots__ = ("identifiers",)
+    identifiers: List[str]
 
     def __init__(self, *identifiers: List[str]) -> None:
-        self.identifiers = list(map(split, identifiers))
+        self.identifiers = list(chain.from_iterable(map(split, identifiers)))
 
     def __repr__(self):
-        return "{._cls_name}('{}')".format(self, " ".join(*self.identifiers))
+        return "{._cls_name}('{}')".format(self, " ".join(self.identifiers))
+
+    def get_xdc(self, name):
+        if len(self) == 1:
+            print(self.identifiers)
+            return self.template.substitute(
+                pin=self.identifiers[0], name=name)
+        else:
+            return "".join(
+                starmap(lambda p, n: self.template.substitute(pin=p, name=n),
+                        zip(self.identifiers,
+                            map(partial("{}[{}]".format, name), count()))))
+
 
     def __len__(self):
         return len(self.identifiers)
 
+    template = Template("set_property PACKAGE_PIN $pin [get_ports $name]\n")
+
 
 class IOStandard(Constraint):
     __slots__ = ("name",)
+    name: str
 
     def __init__(self, name: str) -> None:
         self.name = name
@@ -56,19 +81,33 @@ class IOStandard(Constraint):
     def __repr__(self):
         return "{0._cls_name}('{0.name}')".format(self)
 
+    def get_xdc(self, name):
+        return self.template.substitute(iostandard=self.name, name=name)
+
+    template = Template(
+        "set_property IOSTANDARD $iostandard [get_ports $name]\n")
+
 
 class Drive(Constraint):
     __slots__ = ("strength",)
+    strength: int
 
     def __init__(self, strength) -> None:
-        self.strength = strength.strip()
+        self.strength = strength
 
     def __repr__(self):
-        return "{0._cls_name}('{0.strength}')".format(self)
+        return "{0._cls_name}({0.strength})".format(self)
+
+    def get_xdc(self, name):
+        return self.template.substitute(drive=self.strength, name=name)
+
+    template = Template(
+        "set_property DRIVE $drive [get_ports $name]\n")
 
 
 class Misc(Constraint):
     __slots__ = ("misc",)
+    misc: str
 
     def __init__(self, misc: str) -> None:
         self.misc = misc.strip()
@@ -76,17 +115,28 @@ class Misc(Constraint):
     def __repr__(self):
         return "{0._cls_name}({0.misc!r})".format(self)
 
+    def get_xdc(self, name):
+        return self.template.substitute(
+            misc=" ".join(self.misc.split("=")), name=name)
+
+    template = Template("set_property $misc [get_ports $name]\n")
+
 
 class Subsignal(Constraint):
     __slots__ = ("name", "constraints")
+    name: str
+    constraints: Set[Constraint]
 
-    def __init__(self, name: str, *constraints: List[Constraint]):
+    def __init__(self, name: str, *constraints: Iterable[Constraint]):
         self.name = name
         self.constraints = set(constraints)
 
     def __repr__(self):
         return "{0._cls_name}('{0.name}', {1})".format(
             self, ", ".join(map(repr, self.constraints)))
+
+    def get_xdc(self, name):
+        raise NotImplementedError
 
 
 connector_decl = Union[Tuple[str, str], Dict[str, str]]
