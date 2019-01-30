@@ -1,7 +1,7 @@
 import unittest
 import functools
 from ..build.platform import *
-from ..build.platform import IOProxy, Port
+from ..build.platform import IOProxy, Port, compose_xdc_from_signal
 from ..hdl.ast import Signal
 
 __all__ = ["ConstraintTestCase"]
@@ -126,3 +126,29 @@ class PlatfromTestCase(unittest.TestCase):
         self.assertIsInstance(plat.port.io0[0], Signal)
         self.assertEqual(plat.port.io0[0].name, "io0_0")
         self.assertEqual(len(plat.port.io0[0]), 1)
+
+
+class ComposeXdcFromSignalTestCase(unittest.TestCase):
+    def test_without_attrs(self):
+        self.assertEqual(
+            compose_xdc_from_signal("foo", Signal(0, name="foo")), "")
+
+    def test_one_attr(self):
+        self.assertEqual(
+            compose_xdc_from_signal(
+                "foo", Signal(0, name="foo_name", attrs={
+                    "misc": Misc(("IOB", True))})),
+"""# foo_name
+set_property IOB TRUE [get_ports foo]
+""")
+
+    def test_multiple_attr(self):
+        self.assertEqual(
+            compose_xdc_from_signal(
+                "foo", Signal(0, name="foo_name", attrs={
+                    "misc": Misc(("IOB", True)),
+                    "iostandard": IOStandard("LVCMOS12")})),
+"""# foo_name
+set_property IOB TRUE [get_ports foo]
+set_property IOSTANDARD LVCMOS12 [get_ports foo]
+""")

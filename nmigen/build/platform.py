@@ -1,9 +1,10 @@
 from abc import ABCMeta, abstractmethod
 from collections import Iterable
-from itertools import filterfalse, chain, starmap, count
+from itertools import filterfalse, chain, starmap, count, repeat
 from operator import or_
 from copy import copy
 import os
+from io import StringIO
 from functools import reduce, partial
 from typing import *  # noqa
 from operator import methodcaller
@@ -14,6 +15,9 @@ from ..hdl.ast import Signal
 
 __all__ = ["Constraint", "Pins", "IOStandard", "Drive", "Misc", "Subsignal",
            "Connector", "Platform", "get_vivado"]
+
+
+split = methodcaller("split")
 
 
 class Constraint(Hashable, metaclass=ABCMeta):
@@ -40,9 +44,6 @@ def isconstraint(x: Any) -> bool:
     return isinstance(x, Constraint)
 
 
-split = methodcaller("split")
-
-
 class Pins(Constraint, Sized):
     __slots__ = ("identifiers",)
     identifiers: List[str]
@@ -63,7 +64,6 @@ class Pins(Constraint, Sized):
                 starmap(lambda p, n: self.template.substitute(pin=p, name=n),
                         zip(self.identifiers,
                             map(partial("{}[{}]".format, name), count()))))
-
 
     def __len__(self):
         return len(self.identifiers)
@@ -245,6 +245,19 @@ class Port:
             return self._get(key)
         except KeyError:
             return super().__getattr__(key)
+
+
+def compose_xdc_from_signal(name: str, signal: Signal):
+    constraints = list(filter(isconstraint, signal.attrs.values()))
+    if len(constraints) == 0:
+        return ""
+
+    with StringIO() as buf:
+        buf.write("# {}\n".format(signal.name))
+        [buf.write(s) for s in starmap(
+            lambda n, c: c.get_xdc(n), zip(repeat(name), constraints))]
+        return buf.getvalue()
+
 
 
 class Platform(NamedTuple):
