@@ -105,12 +105,22 @@ class Drive(Constraint):
         "set_property DRIVE $drive [get_ports $name]\n")
 
 
+def isbool(x: Any) -> bool:
+    return isinstance(x, bool)
+
+
 class Misc(Constraint):
     __slots__ = ("misc",)
     misc: str
 
-    def __init__(self, misc: str) -> None:
-        self.misc = misc.strip()
+    def __init__(self, misc: Union[str, Tuple[str, Union[str, bool]]]) -> None:
+        if isinstance(misc, str):
+            self.misc = misc.strip()
+        else:
+            prop, value = misc
+            self.misc = "{}={}".format(
+                prop.strip().upper(), str(value).upper() if isbool(value) else
+                value)
 
     def __repr__(self):
         return "{0._cls_name}({0.misc!r})".format(self)

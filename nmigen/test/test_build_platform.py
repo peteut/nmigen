@@ -49,6 +49,7 @@ set_property PACKAGE_PIN B28 [get_ports CLKS[1]]
         self.assertIsInstance(Misc("misc"), Constraint)
         self.assertEqual(repr(Misc("  misc ")), "Misc('misc')")
         self.assertEqual(Misc("misc"), Misc(" misc "))
+        self.assertEqual(repr(Misc(("IOB", True))), "Misc('IOB=TRUE')")
 
     def test_misc_xdc(self):
         self.assertEqual(
