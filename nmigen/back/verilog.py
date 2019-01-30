@@ -12,6 +12,7 @@ class YosysError(Exception):
 
 
 def convert(*args, **kwargs):
+    with_meta = kwargs.get("with_meta", False)
     try:
         popen = subprocess.Popen([os.getenv("YOSYS", "yosys"), "-q", "-"],
             stdin=subprocess.PIPE,
@@ -25,8 +26,11 @@ def convert(*args, **kwargs):
         else:
             raise YosysError("Could not find Yosys in PATH. Place `yosys` in PATH or specify "
                              "path explicitly via the YOSYS environment variable") from e
+    if with_meta is True:
+        il_text, module_name, port_map = rtlil.convert(*args, **kwargs)
+    else:
+        il_text = rtlil.convert(*args, **kwargs)
 
-    il_text = rtlil.convert(*args, **kwargs)
     verilog_text, error = popen.communicate("""
 # Convert nMigen's RTLIL to readable Verilog.
 read_ilang <<rtlil
@@ -42,4 +46,7 @@ write_verilog -norename
     if popen.returncode:
         raise YosysError(error.strip())
     else:
-        return verilog_text
+        if with_meta is True:
+            return verilog_text, module_name, port_map
+        else:
+            return verilog_text

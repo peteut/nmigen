@@ -1,6 +1,5 @@
 import io
-import textwrap
-from collections import defaultdict, OrderedDict
+from collections import OrderedDict
 from contextlib import contextmanager
 
 from ..tools import bits_for
@@ -37,6 +36,7 @@ class _Bufferer:
         "\r": "\\r",
         "\n": "\\n",
     })
+
     def __init__(self):
         super().__init__()
         self._buffer = io.StringIO()
@@ -849,7 +849,12 @@ def convert_fragment(builder, fragment, name, top):
 
 
 def convert(fragment, name="top", **kwargs):
+    with_meta = kwargs.pop("with_meta", False)
     fragment = ir.Fragment.get(fragment, platform=None).prepare(**kwargs)
     builder = _Builder()
-    convert_fragment(builder, fragment, name=name, top=True)
-    return str(builder)
+    module_name, port_map = convert_fragment(
+        builder, fragment, name=name, top=True)
+    if with_meta is True:
+        return str(builder), module_name, port_map
+    else:
+        return str(builder)
