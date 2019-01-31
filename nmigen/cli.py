@@ -2,9 +2,13 @@ import argparse
 import logging
 import sys
 import io
+import os
+from os import path
+from edalize import get_edatool
 
 from .back import rtlil, verilog, pysim
 from .hdl.ir import Fragment
+from .build.platform import Platform, get_eda_api
 
 __all__ = ["main"]
 
@@ -44,6 +48,17 @@ def main_parser(parser=None):
     p_simulate.add_argument("-c", "--clocks", dest="sync_clocks",
         metavar="COUNT", type=int, required=True,
         help="simulate for COUNT 'sync' clock periods")
+
+    p_project = p_action.add_parser(
+        "project", help="generate a Xilinx Vivado project")
+    p_project.add_argument("-work",
+        metavar="WORKDIR",
+        default="work", type=str, dest="work_root",
+        help="set workdir to WORKDIR (default: %(default)s)")
+    p_project.add_argument("-name",
+        metavar="PROJECT-NAME",
+        help="project name set to PROJECT-NAME (default: %(default)s)",
+        type=str, default="build", dest="project_name")
 
     return parser
 
@@ -85,7 +100,7 @@ def main_runner(parser, args, design, platform=None, name="top", ports=()):
             args.generate_file.write(output)
         else:
             print(output)
-        logger.info(fragment_info(fragment.prepare()))
+        logger.info(fragment_info(fragment.prepare(ports=ports)))
 
     if args.action == "simulate":
         fragment = Fragment.get(design, platform)
@@ -95,6 +110,20 @@ def main_runner(parser, args, design, platform=None, name="top", ports=()):
                 traces=ports) as sim:
             sim.add_clock(args.sync_period)
             sim.run_until(args.sync_period * args.sync_clocks, run_passive=True)
+
+    if args.action == "project":
+        # build it first
+        os.makedirs(args.work_root, exist_ok=True)
+        filename = "{}.v".format(name)
+        main_runner(parser, parser.parse_args(
+            ["-v", "generate", path.join(args.work_root, filename)]),
+            design, platform, name, ports)
+        eda_api = get_eda_api(
+            platform, args.project_name, name, args.work_root,
+            files=[path.join(args.work_root, filename)])
+        backend = get_edatool(platform.tool)(eda_api, args.work_root)
+        backend.configure([])
+        backend.build()
 
 
 def main(*args, **kwargs):

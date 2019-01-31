@@ -1,5 +1,5 @@
 from abc import ABCMeta, abstractmethod
-from collections import Iterable
+from collections.abc import Iterable
 from itertools import filterfalse, chain, starmap, count, repeat
 from operator import or_
 from copy import copy
@@ -9,12 +9,11 @@ from functools import reduce, partial
 from typing import *  # noqa
 from operator import methodcaller
 from string import Template
-from edalize import get_edatool
 from ..hdl.ast import Signal
 
 
 __all__ = ["Constraint", "Pins", "IOStandard", "Drive", "Misc", "Subsignal",
-           "Connector", "Platform", "get_vivado"]
+           "Connector", "Platform"]
 
 
 split = methodcaller("split")
@@ -215,8 +214,9 @@ class IOProxy(NamedTuple):
 class EdalizeApi(NamedTuple):
     files: List[Dict[str, str]]
     name: str
-    parameters: Dict[str, Dict[str, str]]
     toplevel: str
+    parameters: Dict[str, Dict[str, str]] = {}
+    tool_options: Dict[str, Any] = {}
 
 
 class Port:
@@ -264,30 +264,39 @@ class Platform(NamedTuple):
     io: IOProxy
     connector: Set[Connector]
     name: str
-    parameters: Dict[str, Dict[str, str]] = {}
+    tool: str
+    tool_options: Dict[str, Any] = {}
     files: List[str] = []
 
     @staticmethod
-    def make(name: str, io: Iterable[Tuple],
-             connector: Iterable[Connector] = []) -> "Platform":
+    def make(name: str, io: Iterable[Tuple], tool: str,
+             connector: Iterable[Connector] = [], **kwargs) -> "Platform":
         io_proxy = reduce(IOProxy.make, io, IOProxy())
-        return Platform(name=name.lower(), io=io_proxy, connector=connector)
+        return Platform(
+            name=name, tool=tool, io=io_proxy, connector=set(connector), **kwargs)
 
     @property
     def port(self) -> Port:
         return Port("", self.io)
 
 
-def get_eda_api(plat: Platform,
-                work_root: str = "build") -> Dict:
+def get_filetype(name: str):
+    if name.endswith(".v"):
+        return "verilogSource"
+    elif name.endswith(".vhd") or name.endswith(".vhdl"):
+        return "vhdlSource"
+    elif name.endswith(".xdc"):
+        return "xdc"
+    else:
+        raise ValueError("unkown file extension `.{}`".format(name.split(".")[-1]))
+
+
+def get_eda_api(platform: Platform, name: str, toplevel: str, work_root: str,
+                files: Iterable[str] = [], **kwargs) -> Dict:
+    tool_options = copy(platform.tool_options)
+    tool_options.update(kwargs.get("tool_options", {}))
     return EdalizeApi(
-        files=[{"name": f} for f in plat.files],
-        name=plat.name, parameters=plat.parameters,
-        toplevel=plat.name)._asdict()
-
-
-def get_vivado(plat: Platform, work_root: str = "./work"):
-    eda_api = get_eda_api(plat)
-    os.makedirs(work_root, exist_ok=True)
-    backend = get_edatool("vivado")(eda_api=eda_api, work_root=work_root)
-    return backend
+        files=[{"name": os.path.relpath(f, work_root),
+                "file_type": get_filetype(f)} for f in chain(
+                    platform.files, files)],
+        name=name, toplevel=toplevel, tool_options=tool_options)._asdict()

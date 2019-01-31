@@ -111,15 +111,8 @@ class IOProxyTestCase(unittest.TestCase):
 
 
 class PlatfromTestCase(unittest.TestCase):
-    def test_get_vivado(self):
-        plat = Platform.make("name", _io)._asdict()
-        plat["files"] += ["top.v"]
-        backend = get_vivado(Platform(**plat))
-        backend.configure([])
-        self.assertTrue(get_vivado(Platform(**plat)))
-
     def test_port(self):
-        plat = Platform.make("name", _io)
+        plat = Platform.make("name", _io, "vivado")
         self.assertIsInstance(plat.port, Port)
         self.assertEqual(plat.port.name, "")
         self.assertEqual(plat.port.io0.name, "io0")
