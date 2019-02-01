@@ -228,7 +228,12 @@ class EdalizeApi(NamedTuple):
     tool_options: Dict[str, Any] = {}
 
 
+def isport(x: Any) -> bool:
+    return isinstance(x, Port)
+
+
 class Port:
+    __slots__ = ("name", "io")
     name: str
     io: IOProxy
 
@@ -254,6 +259,14 @@ class Port:
             return self._get(key)
         except KeyError:
             return super().__getattr__(key)
+
+    def __dir__(self) -> List[str]:
+        return dir(self.io)
+
+    def __iter__(self) -> Iterator[Signal]:
+        return chain.from_iterable(map(lambda x: iter(x) if isport(x) else [x],
+                         map(self.__getitem__, dir(self))))
+
 
 
 def compose_xdc_from_signal(name: str, signal: Signal):

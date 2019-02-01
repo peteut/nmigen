@@ -1,6 +1,7 @@
 import unittest
 import functools
 from collections.abc import Iterable
+from operator import attrgetter
 from ..build.platform import *
 from ..build.platform import IOProxy, Port, compose_xdc_from_signal
 from ..hdl.ast import Signal
@@ -134,14 +135,26 @@ class IOProxyTestCase(unittest.TestCase):
 
 
 class PlatfromTestCase(unittest.TestCase):
-    def test_port(self):
-        plat = Platform.make("name", _io, "vivado")
-        self.assertIsInstance(plat.port, Port)
-        self.assertEqual(plat.port.name, "")
-        self.assertEqual(plat.port.io0.name, "io0")
-        self.assertIsInstance(plat.port.io0[0], Signal)
-        self.assertEqual(plat.port.io0[0].name, "io0_0")
-        self.assertEqual(len(plat.port.io0[0]), 1)
+    dut = Platform.make("name", _io, "vivado")
+
+    def test_port_getattr(self):
+        dut = self.dut.port
+        self.assertIsInstance(dut, Port)
+        self.assertEqual(dut.name, "")
+        self.assertEqual(dut.io0.name, "io0")
+        self.assertIsInstance(dut.io0[0], Signal)
+        self.assertEqual(dut.io0[0].name, "io0_0")
+        self.assertEqual(len(dut.io0[0]), 1)
+
+    def test_port_dir(self):
+        dut = self.dut.port
+        self.assertEqual(dir(dut), ["io0", "io1", "io2"])
+
+    def test_port_iter(self):
+        dut = self.dut.port
+        self.assertEqual(
+            ["io0_0", "io0_1", "io1", "io2_sub", "io2_sub2"],
+            list(map(attrgetter("name"), dut)))
 
 
 class ComposeXdcFromSignalTestCase(unittest.TestCase):
