@@ -150,6 +150,10 @@ class PlatfromTestCase(unittest.TestCase):
         dut = self.dut.port
         self.assertEqual(dir(dut), ["io0", "io1", "io2"])
 
+    def test_port_len(self):
+        dut = self.dut.port
+        self.assertEqual(3, len(dut))
+
     def test_port_iter(self):
         dut = self.dut.port
         self.assertEqual(

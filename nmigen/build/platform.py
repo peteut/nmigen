@@ -232,7 +232,7 @@ def isport(x: Any) -> bool:
     return isinstance(x, Port)
 
 
-class Port:
+class Port(Mapping):
     __slots__ = ("name", "io")
     name: str
     io: IOProxy
@@ -251,10 +251,10 @@ class Port:
             return sig
         return port
 
-    def __getitem__(self, key):
+    def __getitem__(self, key) -> Union["Port", Signal]:
         return self._get(key)
 
-    def __getattr__(self, key):
+    def __getattr__(self, key) -> Union["Port", Signal]:
         try:
             return self._get(key)
         except KeyError:
@@ -262,6 +262,9 @@ class Port:
 
     def __dir__(self) -> List[str]:
         return dir(self.io)
+
+    def __len__(self) -> int:
+        return len(dir(self))
 
     def __iter__(self) -> Iterator[Signal]:
         return chain.from_iterable(map(lambda x: iter(x) if isport(x) else [x],
