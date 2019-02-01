@@ -2,7 +2,10 @@ import unittest
 import functools
 from collections.abc import Iterable
 from operator import attrgetter
-from ..build.platform import *
+from ..build.platform import Pins, Constraint, IOStandard, Drive, Misc, \
+    Subsignal, Connector, Platform
+
+    # noqa
 from ..build.platform import IOProxy, Port, compose_xdc_from_signal
 from ..hdl.ast import Signal
 
@@ -16,15 +19,13 @@ class ConstraintTestCase(unittest.TestCase):
         self.assertEqual(Pins("1 "), Pins(" 1 "))
 
     def test_pins_xdc(self):
-        self.assertEqual(
-"""set_property PACKAGE_PIN B26 [get_ports CLK]
-""",
-            Pins("B26").get_xdc("CLK"))
-        self.assertEqual(
-"""set_property PACKAGE_PIN B26 [get_ports CLKS[0]]
+        self.assertEqual("""\
+set_property PACKAGE_PIN B26 [get_ports CLK]
+""", Pins("B26").get_xdc("CLK"))
+        self.assertEqual("""\
+set_property PACKAGE_PIN B26 [get_ports CLKS[0]]
 set_property PACKAGE_PIN B28 [get_ports CLKS[1]]
-""",
-            Pins("B26 B28").get_xdc("CLKS"))
+""", Pins("B26 B28").get_xdc("CLKS"))
 
     def test_iostandard(self):
         self.assertIsInstance(IOStandard("CMOS"), Constraint)
@@ -32,20 +33,18 @@ set_property PACKAGE_PIN B28 [get_ports CLKS[1]]
         self.assertEqual(IOStandard("CMOS"), IOStandard("CMOS"))
 
     def test_iostandard_xdc(self):
-        self.assertEqual(
-"""set_property IOSTANDARD LVCMOS12 [get_ports STATUS]
-""",
-            IOStandard("LVCMOS12").get_xdc("STATUS"))
+        self.assertEqual("""\
+set_property IOSTANDARD LVCMOS12 [get_ports STATUS]
+""", IOStandard("LVCMOS12").get_xdc("STATUS"))
 
     def test_drive(self):
         self.assertIsInstance(Drive(1), Constraint)
         self.assertEqual(repr(Drive(1)), "Drive(1)")
 
     def test_drive_xdc(self):
-        self.assertEqual(
-"""set_property DRIVE 2 [get_ports STATUS]
-""",
-            Drive(2).get_xdc("STATUS"))
+        self.assertEqual("""\
+set_property DRIVE 2 [get_ports STATUS]
+""", Drive(2).get_xdc("STATUS"))
 
     def test_misc(self):
         self.assertIsInstance(Misc("misc"), Constraint)
@@ -54,10 +53,9 @@ set_property PACKAGE_PIN B28 [get_ports CLKS[1]]
         self.assertEqual(repr(Misc(("IOB", True))), "Misc('IOB=TRUE')")
 
     def test_misc_xdc(self):
-        self.assertEqual(
-"""set_property MISC value [get_ports STATUS]
-""",
-            Misc("MISC=value").get_xdc("STATUS"))
+        self.assertEqual("""\
+set_property MISC value [get_ports STATUS]
+""", Misc("MISC=value").get_xdc("STATUS"))
 
     def test_subsignal(self):
         self.assertIsInstance(Subsignal("foo", Pins("1")), Constraint)
@@ -73,19 +71,19 @@ set_property PACKAGE_PIN B28 [get_ports CLKS[1]]
 
 class ConnectorTestCase(unittest.TestCase):
     def test_make(self):
-        self.assertIsInstance(Connector.make(("x", "1 2 3")), Connector)
-        self.assertIsInstance(Connector.make(("x", [("1 2 3"), ("3 4 5")])),
+        self.assertIsInstance(Connector.make(("1 2 3")), Connector)
+        self.assertIsInstance(Connector.make(([("1 2 3"), ("3 4 5")])),
                               Connector)
-        self.assertIsInstance(Connector.make(("x", {"Pin1": "1"})), Connector)
+        self.assertIsInstance(Connector.make({"Pin1": "1"}), Connector)
 
     def test_getitem(self):
         self.assertEqual(
-            Connector.make(("x", "1 2 3")).pins[0], Pins("1 2 3"))
+            Connector.make(("1 2 3")).pins[0], Pins("1 2 3"))
         self.assertEqual(
-            Connector.make(("x", [("1 2 3"), ("4 5 6")])).pins[1],
+            Connector.make([("1 2 3"), ("4 5 6")]).pins[1],
             Pins("4 5 6"))
         self.assertEqual(
-            Connector.make(("x", {"Pin1": "1"})).pins["Pin1"], Pins("1"))
+            Connector.make({"Pin1": "1"}).pins["Pin1"], Pins("1"))
 
 
 _io = [
@@ -103,7 +101,8 @@ class IOProxyTestCase(unittest.TestCase):
 
     def test_reduce_list(self):
         dut = self.dut
-        self.assertEqual(set([Pins("1"), Misc("foo")]), dut.items["io0"].items[0])
+        self.assertEqual(
+            set([Pins("1"), Misc("foo")]), dut.items["io0"].items[0])
         self.assertEqual(set([Pins("2")]), dut.items["io0"].items[1])
         self.assertEqual(set([Pins("3")]), dut.items["io1"])
         self.assertEqual(
@@ -131,7 +130,6 @@ class IOProxyTestCase(unittest.TestCase):
                         "sub": {
                             Pins("4"), IOStandard("CMOS"), Misc("foobar")},
                         "sub2": {IOStandard("CMOS"), Pins("5")}}))])
-
 
 
 class PlatfromTestCase(unittest.TestCase):
@@ -171,7 +169,8 @@ class ComposeXdcFromSignalTestCase(unittest.TestCase):
             compose_xdc_from_signal(
                 "foo", Signal(0, name="foo_name", attrs={
                     "misc": Misc(("IOB", True))})),
-"""# foo_name
+            """\
+# foo_name
 set_property IOB TRUE [get_ports foo]
 """)
 
@@ -180,8 +179,8 @@ set_property IOB TRUE [get_ports foo]
             compose_xdc_from_signal(
                 "foo", Signal(0, name="foo_name", attrs={
                     "misc": Misc(("IOB", True)),
-                    "iostandard": IOStandard("LVCMOS12")})),
-"""# foo_name
+                    "iostandard": IOStandard("LVCMOS12")})), """\
+# foo_name
 set_property IOB TRUE [get_ports foo]
 set_property IOSTANDARD LVCMOS12 [get_ports foo]
 """)

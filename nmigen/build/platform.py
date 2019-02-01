@@ -1,4 +1,5 @@
 from abc import ABCMeta, abstractmethod
+from collections import OrderedDict
 from itertools import filterfalse, chain, starmap, count, repeat
 from operator import or_
 from copy import copy
@@ -147,18 +148,14 @@ class Subsignal(Constraint):
         raise NotImplementedError
 
 
-connector_decl = Union[Tuple[str, str], Dict[str, str]]
-
 
 class Connector(NamedTuple):
-    name: str
     pins: Dict[Union[int, str], Pins]
 
     @staticmethod
-    def make(definition: connector_decl) -> "Connector":
-        name, pins = definition
+    def make(pins: Union[str, Dict[str, str]]) -> "Connector":
         return Connector(
-            name=name, pins={k: Pins(v) for k, v in pins.items()}
+            pins={k: Pins(v) for k, v in pins.items()}
             if isinstance(pins, Dict) else {0: Pins(pins)}
             if isinstance(pins, str) else {
                 k: Pins(v) for k, v in enumerate(pins)})
@@ -284,10 +281,12 @@ def compose_xdc_from_signal(name: str, signal: Signal):
         return buf.getvalue()
 
 
+ConnectorDecl = Tuple[str, Union[str, Mapping]]
+
 
 class Platform(NamedTuple):
     io: IOProxy
-    connector: Set[Connector]
+    connector: Dict[Union[str, int], Connector]
     name: str
     tool: str
     tool_options: Dict[str, Any] = {}
@@ -295,10 +294,11 @@ class Platform(NamedTuple):
 
     @staticmethod
     def make(name: str, io: Iterable[Tuple], tool: str,
-             connector: Iterable[Connector] = [], **kwargs) -> "Platform":
+             connector: Iterable[ConnectorDecl] = [], **kwargs) -> "Platform":
         io_proxy = reduce(IOProxy.make, io, IOProxy())
+        connector_map = OrderedDict((k, Connector.make(v)) for k, v in connector)
         return Platform(
-            name=name, tool=tool, io=io_proxy, connector=set(connector), **kwargs)
+            name=name, tool=tool, io=io_proxy, connector=connector_map, **kwargs)
 
     @property
     def port(self) -> Port:
