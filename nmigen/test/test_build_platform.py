@@ -1,5 +1,6 @@
 import unittest
 import functools
+from collections.abc import Iterable
 from ..build.platform import *
 from ..build.platform import IOProxy, Port, compose_xdc_from_signal
 from ..hdl.ast import Signal
@@ -97,8 +98,10 @@ _io = [
 
 
 class IOProxyTestCase(unittest.TestCase):
+    dut = functools.reduce(IOProxy.make, _io, IOProxy())
+
     def test_reduce_list(self):
-        dut = functools.reduce(IOProxy.make, _io, IOProxy())
+        dut = self.dut
         self.assertEqual(set([Pins("1"), Misc("foo")]), dut.items["io0"].items[0])
         self.assertEqual(set([Pins("2")]), dut.items["io0"].items[1])
         self.assertEqual(set([Pins("3")]), dut.items["io1"])
@@ -108,6 +111,26 @@ class IOProxyTestCase(unittest.TestCase):
         self.assertEqual(
             set([Pins("5"), IOStandard("CMOS")]),
             dut.items["io2"].items["sub2"])
+
+    def test_dir(self):
+        dut = self.dut
+        self.assertEqual(dir(dut), "io0 io1 io2".split())
+
+    def test_itearable(self):
+        dut = self.dut
+        self.assertIsInstance(dut, Iterable)
+        self.assertEqual(
+            list(iter(dut)), [
+                ("io0", IOProxy(items={
+                    0: {Pins("1"), Misc("foo")},
+                    1: {Pins("2")}})),
+                ("io1", {Pins("3")}),
+                ("io2", IOProxy(
+                    items={
+                        "sub": {
+                            Pins("4"), IOStandard("CMOS"), Misc("foobar")},
+                        "sub2": {IOStandard("CMOS"), Pins("5")}}))])
+
 
 
 class PlatfromTestCase(unittest.TestCase):

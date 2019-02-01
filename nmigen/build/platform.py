@@ -1,5 +1,4 @@
 from abc import ABCMeta, abstractmethod
-from collections.abc import Iterable
 from itertools import filterfalse, chain, starmap, count, repeat
 from operator import or_
 from copy import copy
@@ -165,16 +164,20 @@ class Connector(NamedTuple):
                 k: Pins(v) for k, v in enumerate(pins)})
 
 
-def ispins(x):
+def ispins(x: Any) -> bool:
     return isinstance(x, Pins)
 
 
-def issubsignal(x):
+def issubsignal(x: Any) -> bool:
     return isinstance(x, Subsignal)
 
 
-def ensure_iterable(x):
-    return x if isinstance(x, Iterable) else [x]
+def iterable(x: Any) -> bool:
+    return isinstance(x, Iterable)
+
+
+def ensure_iterable(x: Any) -> bool:
+    return x if iterable(x) else [x]
 
 
 class IOProxy(NamedTuple):
@@ -209,6 +212,12 @@ class IOProxy(NamedTuple):
         elif items.get(name) is None:
             items[name] = attrs
         return IOProxy(items)
+
+    def __dir__(self) -> List[str]:
+        return list(self.items.keys())
+
+    def __iter__(self) -> Iterator:
+        return iter(self.items.items())
 
 
 class EdalizeApi(NamedTuple):
