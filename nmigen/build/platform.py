@@ -188,13 +188,9 @@ class IOProxy(NamedTuple):
         items = copy(node.items)
         attrs = reduce(
             or_, map(set,
-                     map(ensure_iterable, filterfalse(issubsignal, rest))))
+                     map(ensure_iterable, filterfalse(issubsignal, rest))), set())
         filtered_attrs = set(filterfalse(issubsignal, attrs))
         subsignals = list(filter(issubsignal, rest))
-        if len(subsignals):
-            items[name] = reduce(
-                IOProxy.make,
-                ((a, filtered_attrs) for a in subsignals), IOProxy())
         if isinstance(len(rest) > 0 and rest[0], int):
             item = items.get(name)
             if item:
@@ -202,6 +198,10 @@ class IOProxy(NamedTuple):
             else:
                 item = IOProxy.make(IOProxy(), rest)
                 items[name] = item
+        elif len(subsignals):
+            items[name] = reduce(
+                IOProxy.make,
+                ((a, filtered_attrs) for a in subsignals), IOProxy())
         elif isinstance(name, int):
             items[name] = attrs
         elif isinstance(ident, Subsignal):

@@ -93,6 +93,10 @@ _io = [
     ("io2",
      Subsignal("sub", Pins("4"), Misc("foobar")),
      Subsignal("sub2", Pins("5")),
+     IOStandard("CMOS")),
+    ("io3", 0,
+     Subsignal("sub", Pins("6"), Misc("foobar")),
+     Subsignal("sub2", Pins("7")),
      IOStandard("CMOS"))]
 
 
@@ -111,14 +115,18 @@ class IOProxyTestCase(unittest.TestCase):
         self.assertEqual(
             set([Pins("5"), IOStandard("CMOS")]),
             dut.items["io2"].items["sub2"])
+        self.assertEqual(
+            set([Pins("7"), IOStandard("CMOS")]),
+            dut.items["io3"].items[0].items["sub2"])
 
     def test_dir(self):
         dut = self.dut
-        self.assertEqual(dir(dut), "io0 io1 io2".split())
+        self.assertEqual(dir(dut), "io0 io1 io2 io3".split())
 
     def test_itearable(self):
         dut = self.dut
         self.assertIsInstance(dut, Iterable)
+        print(list(iter(dut)))
         self.assertEqual(
             list(iter(dut)), [
                 ("io0", IOProxy(items={
@@ -129,7 +137,14 @@ class IOProxyTestCase(unittest.TestCase):
                     items={
                         "sub": {
                             Pins("4"), IOStandard("CMOS"), Misc("foobar")},
-                        "sub2": {IOStandard("CMOS"), Pins("5")}}))])
+                        "sub2": {IOStandard("CMOS"), Pins("5")}})),
+                ("io3",
+                 IOProxy(items={
+                     0: IOProxy(
+                         items={
+                             "sub": {
+                                 Pins("6"), IOStandard("CMOS"), Misc("foobar")},
+                             "sub2": {IOStandard("CMOS"), Pins("7")}})}))])
 
 
 class PlatfromTestCase(unittest.TestCase):
@@ -146,16 +161,16 @@ class PlatfromTestCase(unittest.TestCase):
 
     def test_port_dir(self):
         dut = self.dut.port
-        self.assertEqual(dir(dut), ["io0", "io1", "io2"])
+        self.assertEqual(dir(dut), "io0 io1 io2 io3".split())
 
     def test_port_len(self):
         dut = self.dut.port
-        self.assertEqual(3, len(dut))
+        self.assertEqual(4, len(dut))
 
     def test_port_iter(self):
         dut = self.dut.port
         self.assertEqual(
-            ["io0_0", "io0_1", "io1", "io2_sub", "io2_sub2"],
+            "io0_0 io0_1 io1 io2_sub io2_sub2 io3_0_sub io3_0_sub2".split(),
             list(map(attrgetter("name"), dut)))
 
 
