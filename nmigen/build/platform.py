@@ -4,13 +4,14 @@ from itertools import filterfalse, chain, starmap, count, repeat
 from operator import or_
 from copy import copy
 import os
+import types
 from io import StringIO
 from functools import reduce, partial
 from typing import *  # noqa
 from operator import methodcaller
 from string import Template
 from ..hdl.ast import Signal
-from ..lib.io import TSTriple, Tristate
+from ..lib.io import TSTriple
 from ..hdl.dsl import Module
 
 
@@ -336,36 +337,36 @@ def compose_xdc_from_signal(name: str, signal: Signal):
 ConnectorDecl = Tuple[str, Union[str, Mapping]]
 
 
-class Platform(NamedTuple):
-    io: IOProxy
-    connector_proxy: ConnectorProxy
+class Platform(types.SimpleNamespace):
+    _io: IOProxy
+    _connector: ConnectorProxy
     name: str
     tool: str
     tool_options: Dict[str, Any] = {}
     files: List[str] = []
-    techmap: Dict[str, Callable] = {}
 
     @staticmethod
     def make(name: str, io: Iterable[Tuple], tool: str,
              connector: Iterable[ConnectorDecl] = [], **kwargs) -> "Platform":
         io_proxy = reduce(IOProxy.make, io, IOProxy())
         connector_proxy = reduce(ConnectorProxy.make, connector, ConnectorProxy())
-        return Platform(
-            io_proxy, connector_proxy, name, tool, **kwargs)
+        kwargs = copy(kwargs)
+        kwargs.update(
+            name=name, _io=io_proxy, tool=tool, _connector=connector_proxy)
+        techmap = kwargs.pop("techmap", {})
+        for method in {"get_tristate", "get_multi_reg", "get_reset_sync"} \
+                & set(techmap.keys()):
+            kwargs[method] = techmap[method]
+
+        return Platform(**kwargs)
 
     @property
     def port(self) -> Port:
-        return Port("", self.io)
+        return Port("", self._io)
 
     @property
     def connector(self) -> Connector:
-        return Connector("", self.connector_proxy)
-
-    def get_tristate(self, triple: TSTriple, io: Signal) -> Module:
-        if "get_tristate" in self.techmap:
-            return self.techmap["get_tristate"](triple, io)
-        else:
-            return Tristate(triple, io).elaborate(None)
+        return Connector("", self._connector)
 
 
 def get_filetype(name: str):
