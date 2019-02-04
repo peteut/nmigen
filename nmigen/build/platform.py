@@ -10,6 +10,8 @@ from typing import *  # noqa
 from operator import methodcaller
 from string import Template
 from ..hdl.ast import Signal
+from ..lib.io import TSTriple, Tristate
+from ..hdl.dsl import Module
 
 
 __all__ = ["Constraint", "Pins", "IOStandard", "Drive", "Misc", "Subsignal",
@@ -341,6 +343,7 @@ class Platform(NamedTuple):
     tool: str
     tool_options: Dict[str, Any] = {}
     files: List[str] = []
+    techmap: Dict[str, Callable] = {}
 
     @staticmethod
     def make(name: str, io: Iterable[Tuple], tool: str,
@@ -357,6 +360,12 @@ class Platform(NamedTuple):
     @property
     def connector(self) -> Connector:
         return Connector("", self.connector_proxy)
+
+    def get_tristate(self, triple: TSTriple, io: Signal) -> Module:
+        if "get_tristate" in self.techmap:
+            return self.techmap["get_tristate"](triple, io)
+        else:
+            return Tristate(triple, io).elaborate(None)
 
 
 def get_filetype(name: str):

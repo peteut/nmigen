@@ -8,6 +8,7 @@ from ..build.platform import Pins, Constraint, IOStandard, Drive, Misc, \
     # noqa
 from ..build.platform import IOProxy, Port, compose_xdc_from_signal
 from ..hdl.ast import Signal
+from ..lib.io import TSTriple
 
 __all__ = ["ConstraintTestCase"]
 
@@ -157,7 +158,12 @@ class IOProxyTestCase(unittest.TestCase):
 
 
 class PlatfromTestCase(unittest.TestCase):
-    dut = Platform.make("name", _io, "vivado", _connector)
+    def get_tristate_raise(triple: TSTriple, io: Signal):
+        raise NotImplementedError
+
+    dut = Platform.make(
+        "name", _io, "vivado", _connector,
+        techmap={"get_tristate": get_tristate_raise})
 
     def test_port_getattr(self):
         dut = self.dut.port
@@ -191,6 +197,13 @@ class PlatfromTestCase(unittest.TestCase):
         self.assertEqual(
             "com_0 com1_0 com1_1 deep_a deep_b".split(),
             list(map(attrgetter("name"), dut)))
+
+    def test_get_tristate(self):
+        dut = self.dut
+        triple, io_sig = TSTriple(), Signal()
+        tristate = triple.get_tristate(io_sig)
+        with self.assertRaises(NotImplementedError):
+            tristate.elaborate(dut)
 
 
 class ComposeXdcFromSignalTestCase(unittest.TestCase):
