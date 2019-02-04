@@ -13,7 +13,7 @@ from ..hdl.ast import Signal
 
 
 __all__ = ["Constraint", "Pins", "IOStandard", "Drive", "Misc", "Subsignal",
-           "Connector", "Platform"]
+           "Platform"]
 
 
 split = methodcaller("split")
@@ -55,7 +55,6 @@ class Pins(Constraint, Sized):
 
     def get_xdc(self, name):
         if len(self) == 1:
-            print(self.identifiers)
             return self.template.substitute(
                 pin=self.identifiers[0], name=name)
         else:
@@ -148,17 +147,35 @@ class Subsignal(Constraint):
         raise NotImplementedError
 
 
-
-class Connector(NamedTuple):
-    pins: Dict[Union[int, str], Pins]
+class ConnectorProxy(NamedTuple):
+    pins: Dict[Union[int, str], Union[Pins, "ConnectorProxy"]] = dict()
 
     @staticmethod
-    def make(pins: Union[str, Dict[str, str]]) -> "Connector":
-        return Connector(
-            pins={k: Pins(v) for k, v in pins.items()}
-            if isinstance(pins, Dict) else {0: Pins(pins)}
-            if isinstance(pins, str) else {
-                k: Pins(v) for k, v in enumerate(pins)})
+    def make(node: "ConnectorProxy", args: Tuple) -> "ConnectorProxy":
+        ident, *rest = args
+        pins = copy(node.pins)
+
+        def wrap(x):
+            if isinstance(x, Dict):
+                return reduce(ConnectorProxy.make, x.items(), ConnectorProxy())
+            else:
+                return Pins(x)
+
+        if isinstance(rest[0], Dict):
+            pins[ident] = ConnectorProxy(
+                dict(zip(rest[0].keys(), map(wrap, rest[0].values()))))
+        elif len(rest) and isinstance(rest[0], str):
+           pins[ident] = ConnectorProxy({0: Pins(rest[0])})
+        else:
+            pins[ident] = ConnectorProxy(dict(enumerate(map(Pins, rest[0]))))
+
+        return ConnectorProxy(pins)
+
+    def __dir__(self) -> List[str]:
+        return list(self.pins.keys())
+
+    def __iter__(self) -> Iterator:
+        return iter(self.items.items())
 
 
 def ispins(x: Any) -> bool:
@@ -178,7 +195,7 @@ def ensure_iterable(x: Any) -> bool:
 
 
 class IOProxy(NamedTuple):
-    items: Dict[Union[int, str], NamedTuple] = dict()
+    items: Dict[Union[int, str], Union[Set, "IOProxy"]] = dict()
 
     @staticmethod
     def make(node: "IOProxy", args: Tuple) -> "IOProxy":
@@ -225,10 +242,6 @@ class EdalizeApi(NamedTuple):
     tool_options: Dict[str, Any] = {}
 
 
-def isport(x: Any) -> bool:
-    return isinstance(x, Port)
-
-
 class Port(Mapping):
     __slots__ = ("name", "io")
     name: str
@@ -264,9 +277,46 @@ class Port(Mapping):
         return len(dir(self))
 
     def __iter__(self) -> Iterator[Signal]:
-        return chain.from_iterable(map(lambda x: iter(x) if isport(x) else [x],
-                         map(self.__getitem__, dir(self))))
+        return chain.from_iterable(
+            map(ensure_iterable, map(self.__getitem__, dir(self))))
 
+
+class Connector(Mapping):
+    __slots__ = ("name", "connector")
+    name: str
+    connector: ConnectorProxy
+
+    def __init__(self, name: str, connector: ConnectorProxy) -> None:
+        self.name = name
+        self.connector = connector
+
+    def _get(self, key) -> Union["Connector", Signal]:
+        name = key if self.name == "" else "_".join([self.name, str(key)])
+        if ispins(self.connector.pins[key]):
+            pins = self.connector.pins[key]
+            return Signal(len(pins), name=name, attrs={repr(pins): pins})
+
+        connector = Connector(name, self.connector.pins[key])
+        return connector
+
+    def __getitem__(self, key)-> Union["Connector", Signal]:
+        return self._get(key)
+
+    def __getattr__(self, key) -> Union["Connector", Signal]:
+        try:
+            return self[key]
+        except KeyError:
+            return super().__getattr__(key)
+
+    def __dir__(self):
+        return dir(self.connector)
+
+    def __len__(self) -> int:
+        return len(dir(self))
+
+    def __iter__(self) -> Iterator[Signal]:
+        return chain.from_iterable(
+            map(ensure_iterable, map(self.__getitem__, dir(self))))
 
 
 def compose_xdc_from_signal(name: str, signal: Signal):
@@ -286,7 +336,7 @@ ConnectorDecl = Tuple[str, Union[str, Mapping]]
 
 class Platform(NamedTuple):
     io: IOProxy
-    connector: Dict[Union[str, int], Connector]
+    connector_proxy: ConnectorProxy
     name: str
     tool: str
     tool_options: Dict[str, Any] = {}
@@ -296,13 +346,17 @@ class Platform(NamedTuple):
     def make(name: str, io: Iterable[Tuple], tool: str,
              connector: Iterable[ConnectorDecl] = [], **kwargs) -> "Platform":
         io_proxy = reduce(IOProxy.make, io, IOProxy())
-        connector_map = OrderedDict((k, Connector.make(v)) for k, v in connector)
+        connector_proxy = reduce(ConnectorProxy.make, connector, ConnectorProxy())
         return Platform(
-            name=name, tool=tool, io=io_proxy, connector=connector_map, **kwargs)
+            io_proxy, connector_proxy, name, tool, **kwargs)
 
     @property
     def port(self) -> Port:
         return Port("", self.io)
+
+    @property
+    def connector(self) -> Connector:
+        return Connector("", self.connector_proxy)
 
 
 def get_filetype(name: str):

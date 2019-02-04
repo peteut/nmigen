@@ -3,7 +3,7 @@ import functools
 from collections.abc import Iterable
 from operator import attrgetter
 from ..build.platform import Pins, Constraint, IOStandard, Drive, Misc, \
-    Subsignal, Connector, Platform
+    Subsignal, ConnectorProxy, Platform
 
     # noqa
 from ..build.platform import IOProxy, Port, compose_xdc_from_signal
@@ -13,7 +13,7 @@ __all__ = ["ConstraintTestCase"]
 
 
 class ConstraintTestCase(unittest.TestCase):
-    def test_pins(self):
+    def test_pins_init(self):
         self.assertIsInstance(Pins(""), Constraint)
         self.assertEqual(repr(Pins("1  2  3")), "Pins('1 2 3')")
         self.assertEqual(Pins("1 "), Pins(" 1 "))
@@ -68,22 +68,32 @@ set_property MISC value [get_ports STATUS]
         with self.assertRaises(NotImplementedError):
             Subsignal("foo").get_xdc("FOO")
 
+_connector = [
+    ("com", "1 2 3"),
+    ("com1", [("1 2 3"), ("4 5 6")]),
+    ("deep", {"a": "1", "b": "2"})]
 
-class ConnectorTestCase(unittest.TestCase):
+
+class ConnectorProxyTestCase(unittest.TestCase):
+    dut = functools.reduce(ConnectorProxy.make, _connector, ConnectorProxy())
+
     def test_make(self):
-        self.assertIsInstance(Connector.make(("1 2 3")), Connector)
-        self.assertIsInstance(Connector.make(([("1 2 3"), ("3 4 5")])),
-                              Connector)
-        self.assertIsInstance(Connector.make({"Pin1": "1"}), Connector)
+        dut = self.dut
+        self.assertIsInstance(dut, ConnectorProxy)
+        self.assertIsInstance(dut.pins["deep"], ConnectorProxy)
+
+    def test_dir(self):
+        dut = self.dut
+        self.assertEqual(dir(dut), "com  com1 deep".split())
 
     def test_getitem(self):
-        self.assertEqual(
-            Connector.make(("1 2 3")).pins[0], Pins("1 2 3"))
-        self.assertEqual(
-            Connector.make([("1 2 3"), ("4 5 6")]).pins[1],
-            Pins("4 5 6"))
-        self.assertEqual(
-            Connector.make({"Pin1": "1"}).pins["Pin1"], Pins("1"))
+        dut = self.dut
+        self.assertEqual(dut.pins["com"].pins[0], Pins("1 2 3"))
+        self.assertEqual(dut.pins["com1"].pins[1], Pins("4 5 6"))
+
+    def test_recursive(self):
+        dut = self.dut
+        self.assertEqual(dut.pins["deep"].pins["a"], Pins("1"))
 
 
 _io = [
@@ -126,7 +136,6 @@ class IOProxyTestCase(unittest.TestCase):
     def test_itearable(self):
         dut = self.dut
         self.assertIsInstance(dut, Iterable)
-        print(list(iter(dut)))
         self.assertEqual(
             list(iter(dut)), [
                 ("io0", IOProxy(items={
@@ -148,7 +157,7 @@ class IOProxyTestCase(unittest.TestCase):
 
 
 class PlatfromTestCase(unittest.TestCase):
-    dut = Platform.make("name", _io, "vivado")
+    dut = Platform.make("name", _io, "vivado", _connector)
 
     def test_port_getattr(self):
         dut = self.dut.port
@@ -171,6 +180,16 @@ class PlatfromTestCase(unittest.TestCase):
         dut = self.dut.port
         self.assertEqual(
             "io0_0 io0_1 io1 io2_sub io2_sub2 io3_0_sub io3_0_sub2".split(),
+            list(map(attrgetter("name"), dut)))
+
+    def test_connector_len(self):
+        dut = self.dut.connector
+        self.assertEqual(3, len(dut))
+
+    def test_connector_iter(self):
+        dut = self.dut.connector
+        self.assertEqual(
+            "com_0 com1_0 com1_1 deep_a deep_b".split(),
             list(map(attrgetter("name"), dut)))
 
 
