@@ -337,6 +337,12 @@ def compose_xdc_from_signal(name: str, signal: Signal):
 ConnectorDecl = Tuple[str, Union[str, Mapping]]
 
 
+techmaps = {
+    "get_tristate", "get_multi_reg", "get_reset_sync",
+    "get_differential_input", "get_differential_output",
+    "get_ddr_input", "get_ddr_output"}
+
+
 class Platform(types.SimpleNamespace):
     _io: IOProxy
     _connector: ConnectorProxy
@@ -354,8 +360,7 @@ class Platform(types.SimpleNamespace):
         kwargs.update(
             name=name, _io=io_proxy, tool=tool, _connector=connector_proxy)
         techmap = kwargs.pop("techmap", {})
-        for method in {"get_tristate", "get_multi_reg", "get_reset_sync"} \
-                & set(techmap.keys()):
+        for method in techmaps & set(techmap.keys()):
             kwargs[method] = techmap[method]
 
         return Platform(**kwargs)
