@@ -250,6 +250,9 @@ class _ValueCompilerState:
         self.ports[signal] = (len(self.ports), kind)
 
     def resolve(self, signal, prefix=None):
+        if isinstance(signal, ast.Slice):
+            signal = signal.value
+
         if signal in self.wires:
             return self.wires[signal]
 
