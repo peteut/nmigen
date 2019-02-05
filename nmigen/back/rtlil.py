@@ -4,6 +4,7 @@ from contextlib import contextmanager
 
 from ..tools import bits_for
 from ..hdl import ast, ir, mem, xfrm
+from ..build import platform
 
 
 __all__ = ["convert"]
@@ -48,7 +49,9 @@ class _Bufferer:
         self._buffer.write(fmt.format(*args, **kwargs))
 
     def attribute(self, name, value, indent=0):
-        if isinstance(value, str):
+        if isinstance(value, platform.Constraint):
+            pass
+        elif isinstance(value, str):
             self._append("{}attribute \\{} \"{}\"\n",
                          "  " * indent, name, value.translate(self._escape_map))
         else:
