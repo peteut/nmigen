@@ -1,9 +1,10 @@
 import unittest
 import functools
+from collections import OrderedDict
 from collections.abc import Iterable
 from operator import attrgetter
 from ..build.platform import Pins, Constraint, IOStandard, Drive, Misc, \
-    Subsignal, ConnectorProxy, Platform
+    Subsignal, ConnectorProxy, Platform, xdc_writer
 
     # noqa
 from ..build.platform import IOProxy, Port, compose_xdc_from_signal
@@ -230,4 +231,20 @@ set_property IOB TRUE [get_ports foo]
 # foo_name
 set_property IOB TRUE [get_ports foo]
 set_property IOSTANDARD LVCMOS12 [get_ports foo]
+""")
+
+
+class XDCWriterTestCase(unittest.TestCase):
+    port_map = OrderedDict(
+        zip("a b c".split(),
+            map(lambda x: Signal(attrs={repr(x): x}),
+                map(Pins, "1 2 3".split()))))
+
+    def test_xdc_writer(self):
+        self.assertEqual(
+            xdc_writer(self.port_map),
+            """\
+set_property PACKAGE_PIN 1 [get_ports a]
+set_property PACKAGE_PIN 2 [get_ports b]
+set_property PACKAGE_PIN 3 [get_ports c]
 """)

@@ -16,7 +16,7 @@ from ..hdl.dsl import Module
 
 
 __all__ = ["Constraint", "Pins", "IOStandard", "Drive", "Misc", "Subsignal",
-           "Platform"]
+           "Platform", "xdc_writer"]
 
 
 split = methodcaller("split")
@@ -302,7 +302,7 @@ class Connector(Mapping):
         connector = Connector(name, self.connector.pins[key])
         return connector
 
-    def __getitem__(self, key)-> Union["Connector", Signal]:
+    def __getitem__(self, key) -> Union["Connector", Signal]:
         return self._get(key)
 
     def __getattr__(self, key) -> Union["Connector", Signal]:
@@ -394,3 +394,14 @@ def get_eda_api(platform: Platform, name: str, toplevel: str, work_root: str,
                 "file_type": get_filetype(f)} for f in chain(
                     platform.files, files)],
         name=name, toplevel=toplevel, tool_options=tool_options)._asdict()
+
+
+def xdc_writer(port_map: Mapping[str, Signal]) -> str:
+    def filter_contraints(k, v):
+        return zip(repeat(k), filter(isconstraint, v.attrs.values()))
+
+    with StringIO() as buf:
+        constraints = chain.from_iterable(
+            starmap(filter_contraints, port_map.items()))
+        [buf.write(v.get_xdc(k)) for k, v in constraints]
+        return buf.getvalue()
