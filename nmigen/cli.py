@@ -54,14 +54,16 @@ def main_parser(parser=None):
 
     p_project = p_action.add_parser(
         "project", help="generate a Xilinx Vivado project")
-    p_project.add_argument("-work",
-        metavar="WORKDIR",
+    p_project.add_argument(
+        "-work", metavar="WORKDIR",
         default="work", type=str, dest="work_root",
         help="set workdir to WORKDIR (default: %(default)s)")
-    p_project.add_argument("-name",
-        metavar="PROJECT-NAME",
+    p_project.add_argument(
+        "-name", metavar="PROJECT-NAME",
         help="project name set to PROJECT-NAME (default: %(default)s)",
         type=str, default="build", dest="project_name")
+    p_project.add_argument(
+        "--build", action="store_true", dest="project_build")
 
     return parser
 
@@ -129,7 +131,8 @@ def main_runner(parser, args, design, platform=None, name="top", ports=()):
             files=[str(f) for f in [hdl_path, config_path]])
         backend = get_edatool(platform.tool)(eda_api, str(work_path))
         backend.configure([])
-        backend.build()
+        if args.project_build:
+            backend.build()
 
 
 def main(*args, **kwargs):
