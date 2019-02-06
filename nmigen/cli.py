@@ -4,11 +4,14 @@ import sys
 import io
 import os
 from os import path
+import pathlib
+from collections import OrderedDict
+from operator import attrgetter
 from edalize import get_edatool
 
 from .back import rtlil, verilog, pysim
 from .hdl.ir import Fragment
-from .build.platform import Platform, get_eda_api
+from .build.platform import Platform, get_eda_api, xdc_writer
 
 __all__ = ["main"]
 
@@ -112,16 +115,19 @@ def main_runner(parser, args, design, platform=None, name="top", ports=()):
             sim.run_until(args.sync_period * args.sync_clocks, run_passive=True)
 
     if args.action == "project":
-        # build it first
-        os.makedirs(args.work_root, exist_ok=True)
-        filename = "{}.v".format(name)
+        work_path = pathlib.Path(args.work_root)
+        work_path.mkdir(parents=True, exist_ok=True)
+        hdl_path = work_path.joinpath(name + ".v")
+        config_path = work_path.joinpath(name + ".xdc")
+        ports_map = OrderedDict(zip([p.name for p in ports], ports))
+        config_path.open("w").write(xdc_writer(ports_map))
         main_runner(parser, parser.parse_args(
-            ["-v", "generate", path.join(args.work_root, filename)]),
+            ["-v", "generate", str(hdl_path)]),
             design, platform, name, ports)
         eda_api = get_eda_api(
-            platform, args.project_name, name, args.work_root,
-            files=[path.join(args.work_root, filename)])
-        backend = get_edatool(platform.tool)(eda_api, args.work_root)
+            platform, args.project_name, name, str(work_path),
+            files=[str(f) for f in [hdl_path, config_path]])
+        backend = get_edatool(platform.tool)(eda_api, str(work_path))
         backend.configure([])
         backend.build()
 
