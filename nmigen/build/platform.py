@@ -337,7 +337,7 @@ def compose_xdc_from_signal(name: str, signal: Signal):
 ConnectorDecl = Tuple[str, Union[str, Mapping]]
 
 
-techmaps = {
+_techmap = {
     "get_tristate", "get_multi_reg", "get_reset_sync",
     "get_differential_input", "get_differential_output",
     "get_ddr_input", "get_ddr_output"}
@@ -360,9 +360,10 @@ class Platform(types.SimpleNamespace):
         kwargs.update(
             name=name, _io=io_proxy, tool=tool, _connector=connector_proxy)
         techmap = kwargs.pop("techmap", {})
-        for method in techmaps & set(techmap.keys()):
+        for method in _techmap & set(techmap):
             kwargs[method] = techmap[method]
 
+        kwargs.update(_tool_supportmap[tool])
         return Platform(**kwargs)
 
     @property
@@ -405,3 +406,7 @@ def xdc_writer(port_map: Mapping[str, Signal]) -> str:
             starmap(filter_contraints, port_map.items()))
         [buf.write(v.get_xdc(k)) for k, v in constraints]
         return buf.getvalue()
+
+
+_tool_supportmap = {
+    "vivado": {"config_writer": xdc_writer, "config_extension": ".xdc"}}

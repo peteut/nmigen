@@ -118,9 +118,9 @@ def main_runner(parser, args, design, platform=None, name="top", ports=()):
         work_path = pathlib.Path(args.work_root)
         work_path.mkdir(parents=True, exist_ok=True)
         hdl_path = work_path.joinpath(name + ".v")
-        config_path = work_path.joinpath(name + ".xdc")
+        config_path = work_path.joinpath(name + platform.config_extension)
         ports_map = OrderedDict(zip([p.name for p in ports], ports))
-        config_path.open("w").write(xdc_writer(ports_map))
+        config_path.open("w").write(platform.config_writer(ports_map))
         main_runner(parser, parser.parse_args(
             ["-v", "generate", str(hdl_path)]),
             design, platform, name, ports)
