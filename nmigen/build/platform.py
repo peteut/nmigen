@@ -1,9 +1,9 @@
 from abc import ABCMeta, abstractmethod
-from collections import OrderedDict
 from itertools import filterfalse, chain, starmap, count, repeat
 from operator import or_
 from copy import copy
 import os
+import pathlib
 import types
 from io import StringIO
 from functools import reduce, partial
@@ -11,8 +11,6 @@ from typing import *  # noqa
 from operator import methodcaller
 from string import Template
 from ..hdl.ast import Signal
-from ..lib.io import TSTriple
-from ..hdl.dsl import Module
 
 
 __all__ = ["Constraint", "Pins", "IOStandard", "Drive", "Misc", "Subsignal",
@@ -168,7 +166,7 @@ class ConnectorProxy(NamedTuple):
             pins[ident] = ConnectorProxy(
                 dict(zip(rest[0].keys(), map(wrap, rest[0].values()))))
         elif len(rest) and isinstance(rest[0], str):
-           pins[ident] = ConnectorProxy({0: Pins(rest[0])})
+            pins[ident] = ConnectorProxy({0: Pins(rest[0])})
         else:
             pins[ident] = ConnectorProxy(dict(enumerate(map(Pins, rest[0]))))
 
@@ -349,7 +347,7 @@ class Platform(types.SimpleNamespace):
     name: str
     tool: str
     tool_options: Dict[str, Any] = {}
-    files: List[str] = []
+    files: List[pathlib.Path] = []
 
     @staticmethod
     def make(name: str, io: Iterable[Tuple], tool: str,
@@ -390,10 +388,19 @@ def get_eda_api(platform: Platform, name: str, toplevel: str, work_root: str,
                 files: Iterable[str] = [], **kwargs) -> Dict:
     tool_options = copy(platform.tool_options)
     tool_options.update(kwargs.get("tool_options", {}))
+    work_path = pathlib.Path(work_root)
+    work_path.mkdir(parents=True, exist_ok=True)
+    # copy platform.files to work
+    for f in platform.files:
+        new_path = work_path.joinpath(f.name)
+        data = f.read_text()
+        new_path.write_text(data)
+
     return EdalizeApi(
-        files=[{"name": os.path.relpath(f, work_root),
-                "file_type": get_filetype(f)} for f in chain(
-                    platform.files, files)],
+        files=[{"name": str(f.relative_to(work_root)),
+                "file_type": get_filetype(f.name)} for f in chain(
+                    [work_path.joinpath(f.name) for f in platform.files],
+                    [pathlib.Path(f) for f in files])],
         name=name, toplevel=toplevel, tool_options=tool_options)._asdict()
 
 
