@@ -1,17 +1,13 @@
 import argparse
 import logging
 import sys
-import io
-import os
-from os import path
 import pathlib
 from collections import OrderedDict
-from operator import attrgetter
 from edalize import get_edatool
 
 from .back import rtlil, verilog, pysim
 from .hdl.ir import Fragment
-from .build.platform import Platform, get_eda_api, xdc_writer
+from .build.platform import get_eda_api
 
 __all__ = ["main"]
 
@@ -68,23 +64,6 @@ def main_parser(parser=None):
     return parser
 
 
-def fragment_info(fragment: Fragment) -> str:
-    join_sigs = "\n".join
-    format_sigs = lambda it: join_sigs(map(
-        "  name: {0.name:<20} nbits: {0.nbits:<3} signed: {0.signed}".format,
-        it))
-
-    with io.StringIO() as output:
-        output.write("converted Fragment\n")
-        write_if_any = lambda fn, fmt_fn: len(tuple(fn())) and output.write(
-            fmt_fn(format_sigs(fn())))
-        write_if_any(lambda: fragment.iter_ports("i"), "inputs:\n{}\n".format)
-        write_if_any(lambda: fragment.iter_ports("o"), "outputs:\n{}\n".format)
-        write_if_any(lambda: fragment.iter_ports("io"), "inouts:\n{}\n".format)
-        write_if_any(fragment.iter_signals, "signals:\n{}\n".format)
-        return output.getvalue()
-
-
 def main_runner(parser, args, design, platform=None, name="top", ports=()):
     logger.setLevel(max(logging.ERROR - args.verbose * 10, logging.DEBUG))
     if args.action == "generate":
@@ -105,7 +84,6 @@ def main_runner(parser, args, design, platform=None, name="top", ports=()):
             args.generate_file.write(output)
         else:
             print(output)
-        logger.info(fragment_info(fragment.prepare(ports=ports)))
 
     if args.action == "simulate":
         fragment = Fragment.get(design, platform)
