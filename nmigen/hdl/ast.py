@@ -409,10 +409,6 @@ class Slice(Value):
         self.start = start
         self.end   = end
 
-    @property
-    def duid(self):
-        return self.value.duid
-
     def shape(self):
         return self.end - self.start, False
 
@@ -1211,7 +1207,7 @@ class ValueSet(_MappedKeySet):
 
 class SignalKey:
     def __init__(self, signal):
-        if type(signal) in (Signal, Slice):
+        if type(signal) is Signal:
             self._intern = (0, signal.duid)
         elif type(signal) is ClockSignal:
             self._intern = (1, signal.domain)
