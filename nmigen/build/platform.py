@@ -2,7 +2,6 @@ from abc import ABCMeta, abstractmethod
 from itertools import filterfalse, chain, starmap, count, repeat
 from operator import or_
 from copy import copy
-import os
 import pathlib
 import types
 from io import StringIO
@@ -14,7 +13,7 @@ from ..hdl.ast import Signal
 
 
 __all__ = ["Constraint", "Pins", "IOStandard", "Drive", "Misc", "Subsignal",
-           "Platform", "xdc_writer"]
+           "Clock", "Platform", "xdc_writer"]
 
 
 split = methodcaller("split")
@@ -146,6 +145,34 @@ class Subsignal(Constraint):
 
     def get_xdc(self, name):
         raise NotImplementedError
+
+
+class Clock(Constraint):
+    __slots__ = ("period", "waveform")
+    period: float
+    waveform: Tuple[float, float]
+
+    def __init__(self, period: float,
+                 waveform: Optional[Tuple[float, float]] = None):
+        if waveform is None:
+            waveform = (0., period / 2)
+        self.period = period
+        self.waveform = waveform
+
+    def __repr__(self):
+        return "{0._cls_name}({0.period!r}, {0.waveform!r})".format(self)
+
+    def get_xdc(self, name):
+        float_fmt = "{:.3f}".format
+        on_period, off_period = map(float_fmt, self.waveform)
+        return self.template.substitute(
+            name=name, period=float_fmt(self.period),
+            off_period=off_period, on_period=on_period)
+
+    template = Template("create_clock -name cd_$name -period $period "
+                        "-waveform {$on_period $off_period} "
+                        "[get_ports $name]")
+
 
 
 class ConnectorProxy(NamedTuple):

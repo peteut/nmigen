@@ -4,7 +4,7 @@ from collections import OrderedDict
 from collections.abc import Iterable
 from operator import attrgetter
 from ..build.platform import Pins, Constraint, IOStandard, Drive, Misc, \
-    Subsignal, ConnectorProxy, Platform, xdc_writer
+    Subsignal, Clock, ConnectorProxy, Platform, xdc_writer
 
     # noqa
 from ..build.platform import IOProxy, Port, compose_xdc_from_signal
@@ -69,6 +69,17 @@ set_property MISC value [get_ports STATUS]
     def test_subsignal_xdc(self):
         with self.assertRaises(NotImplementedError):
             Subsignal("foo").get_xdc("FOO")
+
+    def test_clock(self):
+        self.assertIsInstance(Clock(10.), Constraint)
+        self.assertEqual(repr(Clock(10.)), "Clock({!r}, {!r})".format(
+            10., (0., 5.)))
+
+    def test_xdc(self):
+        self.assertEqual("""\
+create_clock -name cd_CLK -period 10.000 -waveform {0.000 5.000} \
+[get_ports CLK]""", Clock(10.).get_xdc("CLK"))
+
 
 _connector = [
     ("com", "1 2 3"),
