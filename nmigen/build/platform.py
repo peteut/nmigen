@@ -13,7 +13,7 @@ from ..hdl.ast import Signal
 
 
 __all__ = ["Constraint", "Pins", "IOStandard", "Drive", "Misc", "Subsignal",
-           "Clock", "Platform", "xdc_writer"]
+           "Clock", "Platform"]
 
 
 split = methodcaller("split")
@@ -375,6 +375,7 @@ class Platform(types.SimpleNamespace):
     tool: str
     tool_options: Dict[str, Any] = {}
     files: List[pathlib.Path] = []
+    commands: List[str] = []
 
     @staticmethod
     def make(name: str, io: Iterable[Tuple], tool: str,
