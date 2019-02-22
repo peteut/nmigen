@@ -125,9 +125,15 @@ class Misc(Constraint):
 
     def get_xdc(self, name):
         return self.template.substitute(
+            type="ports",
             misc=" ".join(self.misc.split("=")), name=name)
 
-    template = Template("set_property $misc [get_ports $name]\n")
+    def get_xdc_nets(self, name):
+        return self.template.substitute(
+            type="nets",
+            misc=" ".join(self.misc.split("=")), name=name)
+
+    template = Template("set_property $misc [get_$type $name]\n")
 
 
 class Subsignal(Constraint):

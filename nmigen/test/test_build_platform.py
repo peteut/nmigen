@@ -59,6 +59,11 @@ set_property DRIVE 2 [get_ports STATUS]
 set_property MISC value [get_ports STATUS]
 """, Misc("MISC=value").get_xdc("STATUS"))
 
+    def test_misc_nets(self):
+        self.assertEqual("""\
+set_property MISC value [get_nets STATUS]
+""", Misc("MISC=value").get_xdc_nets("STATUS"))
+
     def test_subsignal(self):
         self.assertIsInstance(Subsignal("foo", Pins("1")), Constraint)
         self.assertEqual(repr(Subsignal("foo", Pins("  1 2 3 "))),
