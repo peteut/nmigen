@@ -25,6 +25,8 @@ def main_parser(parser=None):
 
     parser.add_argument(
         "--verbose", "-v", action="count", default=1)
+    # parser.add_argument(
+    #     "-V", action="store_true", help="print version information and exit")
     p_action = parser.add_subparsers(dest="action")
 
     p_generate = p_action.add_parser("generate",
@@ -70,6 +72,7 @@ def main_parser(parser=None):
 
 def main_runner(parser, args, design, platform=None, name="top", ports=()):
     logger.setLevel(max(logging.ERROR - args.verbose * 10, logging.DEBUG))
+
     if args.action == "generate":
         fragment = Fragment.get(design, platform)
         generate_type = args.generate_type

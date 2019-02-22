@@ -4,7 +4,7 @@ from collections import OrderedDict
 from collections.abc import Iterable
 from operator import attrgetter
 from ..build.platform import Pins, Constraint, IOStandard, Drive, Misc, \
-    Subsignal, Clock, ConnectorProxy, Platform, xdc_writer
+    Subsignal, Clock, InputDelay, ConnectorProxy, Platform, xdc_writer
 
     # noqa
 from ..build.platform import IOProxy, Port, compose_xdc_from_signal
@@ -80,10 +80,21 @@ set_property MISC value [get_nets STATUS]
         self.assertEqual(repr(Clock(10.)), "Clock({!r}, {!r})".format(
             10., (0., 5.)))
 
-    def test_xdc(self):
+    def test_clock_xdc(self):
         self.assertEqual("""\
 create_clock -name cd_CLK -period 10.000 -waveform {0.000 5.000} \
-[get_ports CLK]""", Clock(10.).get_xdc("CLK"))
+[get_ports CLK]
+""", Clock(10.).get_xdc("CLK"))
+
+    def test_input_delay(self):
+        self.assertIsInstance(InputDelay("clk", 2.), Constraint)
+        self.assertEqual(repr(InputDelay("clk", 2.)),
+                         "InputDelay('clk', 2.000)")
+
+    def test_input_delay_xdc(self):
+        self.assertEqual("""\
+set_input_delay -clock cd_CLK 2.000 [get_ports INPUT]
+""", InputDelay("CLK", 2.).get_xdc("INPUT"))
 
 
 _connector = [

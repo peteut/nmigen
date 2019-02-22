@@ -13,7 +13,7 @@ from ..hdl.ast import Signal
 
 
 __all__ = ["Constraint", "Pins", "IOStandard", "Drive", "Misc", "Subsignal",
-           "Clock", "Platform"]
+           "Clock", "InputDelay", "Platform"]
 
 
 split = methodcaller("split")
@@ -120,15 +120,15 @@ class Misc(Constraint):
                 prop.strip().upper(), str(value).upper() if isbool(value) else
                 value)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "{0._cls_name}({0.misc!r})".format(self)
 
-    def get_xdc(self, name):
+    def get_xdc(self, name) -> str:
         return self.template.substitute(
             type="ports",
             misc=" ".join(self.misc.split("=")), name=name)
 
-    def get_xdc_nets(self, name):
+    def get_xdc_nets(self, name) -> str:
         return self.template.substitute(
             type="nets",
             misc=" ".join(self.misc.split("=")), name=name)
@@ -141,16 +141,19 @@ class Subsignal(Constraint):
     name: str
     constraints: Set[Constraint]
 
-    def __init__(self, name: str, *constraints: Iterable[Constraint]):
+    def __init__(self, name: str, *constraints: Iterable[Constraint]) -> None:
         self.name = name
         self.constraints = set(constraints)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "{0._cls_name}('{0.name}', {1})".format(
             self, ", ".join(map(repr, self.constraints)))
 
     def get_xdc(self, name):
         raise NotImplementedError
+
+
+float_fmt = "{:.3f}".format
 
 
 class Clock(Constraint):
@@ -159,17 +162,16 @@ class Clock(Constraint):
     waveform: Tuple[float, float]
 
     def __init__(self, period: float,
-                 waveform: Optional[Tuple[float, float]] = None):
+                 waveform: Optional[Tuple[float, float]] = None) -> None:
         if waveform is None:
             waveform = (0., period / 2)
         self.period = period
         self.waveform = waveform
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "{0._cls_name}({0.period!r}, {0.waveform!r})".format(self)
 
-    def get_xdc(self, name):
-        float_fmt = "{:.3f}".format
+    def get_xdc(self, name) -> str:
         on_period, off_period = map(float_fmt, self.waveform)
         return self.template.substitute(
             name=name, period=float_fmt(self.period),
@@ -177,8 +179,29 @@ class Clock(Constraint):
 
     template = Template("create_clock -name cd_$name -period $period "
                         "-waveform {$on_period $off_period} "
-                        "[get_ports $name]")
+                        "[get_ports $name]\n")
 
+
+class InputDelay(Constraint):
+    __slots__ = ("clock_name", "delay")
+    clock_name: str
+    delay: float
+
+    def __init__(self, clk_name: str, delay: float) -> None:
+        self.clock_name = clk_name
+        self.delay = delay
+
+    def __repr__(self) -> str:
+        return "{0._cls_name}('{0.clock_name}', {1})".format(
+            self, float_fmt(self.delay))
+
+    def get_xdc(self, name) -> str:
+        return self.template.substitute(
+            clock_name=self.clock_name,
+            delay=float_fmt(self.delay), name=name)
+
+    template = Template("set_input_delay -clock cd_$clock_name $delay "
+                        "[get_ports $name]\n")
 
 
 class ConnectorProxy(NamedTuple):
