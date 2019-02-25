@@ -185,23 +185,28 @@ class Clock(Constraint):
 class InputDelay(Constraint):
     __slots__ = ("clock_name", "delay")
     clock_name: str
-    delay: float
+    delay: Tuple[float, float]
 
-    def __init__(self, clk_name: str, delay: float) -> None:
+    def __init__(self, clk_name: str,
+                 delay: Union[float, Tuple[float, float]]) -> None:
         self.clock_name = clk_name
-        self.delay = delay
+        self.delay = (delay, delay) if isinstance(delay, float) else delay
 
     def __repr__(self) -> str:
-        return "{0._cls_name}('{0.clock_name}', {1})".format(
-            self, float_fmt(self.delay))
+        return "{0._cls_name}('{0.clock_name}', ({1[0]}, {1[1]}))".format(
+            self, tuple((float_fmt(x) for x in self.delay)))
 
     def get_xdc(self, name) -> str:
         return self.template.substitute(
             clock_name=self.clock_name,
-            delay=float_fmt(self.delay), name=name)
+            delay_min=float_fmt(min(self.delay)),
+            delay_max=float_fmt(max(self.delay)), name=name)
 
-    template = Template("set_input_delay -clock cd_$clock_name $delay "
-                        "[get_ports $name]\n")
+    template = Template(
+        "set_input_delay -clock cd_$clock_name -min $delay_min "
+        "[get_ports $name]\n"
+        "set_input_delay -clock cd_$clock_name -max $delay_max "
+        "[get_ports $name]\n")
 
 
 class ConnectorProxy(NamedTuple):

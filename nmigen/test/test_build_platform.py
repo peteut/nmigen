@@ -89,12 +89,13 @@ create_clock -name cd_CLK -period 10.000 -waveform {0.000 5.000} \
     def test_input_delay(self):
         self.assertIsInstance(InputDelay("clk", 2.), Constraint)
         self.assertEqual(repr(InputDelay("clk", 2.)),
-                         "InputDelay('clk', 2.000)")
+                         "InputDelay('clk', (2.000, 2.000))")
 
     def test_input_delay_xdc(self):
         self.assertEqual("""\
-set_input_delay -clock cd_CLK 2.000 [get_ports INPUT]
-""", InputDelay("CLK", 2.).get_xdc("INPUT"))
+set_input_delay -clock cd_CLK -min 0.500 [get_ports INPUT]
+set_input_delay -clock cd_CLK -max 2.000 [get_ports INPUT]
+""", InputDelay("CLK", (0.5, 2.0)).get_xdc("INPUT"))
 
 
 _connector = [
