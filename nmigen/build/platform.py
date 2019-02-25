@@ -13,7 +13,7 @@ from ..hdl.ast import Signal
 
 
 __all__ = ["Constraint", "Pins", "IOStandard", "Drive", "Misc", "Subsignal",
-           "Clock", "InputDelay", "Platform"]
+           "Clock", "InputDelay", "OutputDelay", "Platform"]
 
 
 split = methodcaller("split")
@@ -203,9 +203,35 @@ class InputDelay(Constraint):
             delay_max=float_fmt(max(self.delay)), name=name)
 
     template = Template(
-        "set_input_delay -clock cd_$clock_name -min $delay_min "
-        "[get_ports $name]\n"
         "set_input_delay -clock cd_$clock_name -max $delay_max "
+        "[get_ports $name]\n"
+        "set_input_delay -clock cd_$clock_name -min $delay_min "
+        "[get_ports $name]\n")
+
+
+class OutputDelay(Constraint):
+    __slots__ = ("clock_name", "delay")
+    clock_name: str
+    delay: Tuple[float, float]
+
+    def __init__(self, clk_name: str, min: float, max: float) -> None:
+        self.clock_name = clk_name
+        self.delay = min, max
+
+    def __repr__(self) -> str:
+        return "{0._cls_name}('{0.clock_name}', {1[0]}, {1[1]})".format(
+            self, tuple((float_fmt(x) for x in self.delay)))
+
+    def get_xdc(self, name) -> str:
+        delay_min, delay_max = map(float_fmt, self.delay)
+        return self.template.substitute(
+            clock_name=self.clock_name,
+            delay_min=delay_min, delay_max=delay_max, name=name)
+
+    template = Template(
+        "set_output_delay -clock cd_$clock_name -max $delay_max "
+        "[get_ports $name]\n"
+        "set_output_delay -clock cd_$clock_name -min $delay_min "
         "[get_ports $name]\n")
 
 
