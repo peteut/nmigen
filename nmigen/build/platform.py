@@ -423,7 +423,7 @@ ConnectorDecl = Tuple[str, Union[str, Mapping]]
 
 
 _techmap = {
-    "get_tristate", "get_multi_reg", "get_reset_sync",
+    "get_tristate", "get_multi_reg", "get_reset_sync", "get_pulse_sync",
     "get_differential_input", "get_differential_output",
     "get_ddr_input", "get_ddr_output"}
 
