@@ -10,7 +10,7 @@ from ..build.platform import Pins, Constraint, IOStandard, Drive, Misc, \
     # noqa
 from ..build.platform import IOProxy, Port, compose_xdc_from_signal
 from ..hdl.ast import Signal
-from ..lib.io import TSTriple
+from ..compat.fhdl.specials import TSTriple
 
 __all__ = ["ConstraintTestCase"]
 

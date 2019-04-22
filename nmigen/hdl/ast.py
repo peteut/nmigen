@@ -246,7 +246,8 @@ class Const(Value):
             shape = shape, self.value < 0
         self.nbits, self.signed = shape
         if not isinstance(self.nbits, int) or self.nbits < 0:
-            raise TypeError("Width must be a non-negative integer, not '{!r}'", self.nbits)
+            raise TypeError("Width must be a non-negative integer, not '{!r}'"
+                            .format(self.nbits))
         self.value = self.normalize(self.value, shape)
 
     def shape(self):
@@ -272,7 +273,8 @@ class AnyValue(Value, DUID):
             shape = shape, False
         self.nbits, self.signed = shape
         if not isinstance(self.nbits, int) or self.nbits < 0:
-            raise TypeError("Width must be a non-negative integer, not '{!r}'", self.nbits)
+            raise TypeError("Width must be a non-negative integer, not '{!r}'"
+                            .format(self.nbits))
 
     def shape(self):
         return self.nbits, self.signed
@@ -591,11 +593,15 @@ class Signal(Value, DUID):
             if max is None:
                 max = 2
             max -= 1  # make both bounds inclusive
-            if not min < max:
-                raise ValueError("Lower bound {} should be less than higher bound {}"
-                                 .format(min, max))
+            if min > max:
+                raise ValueError("Lower bound {} should be less or equal to higher bound {}"
+                                 .format(min, max + 1))
             self.signed = min < 0 or max < 0
-            self.nbits  = builtins.max(bits_for(min, self.signed), bits_for(max, self.signed))
+            if min == max:
+                self.nbits = 0
+            else:
+                self.nbits = builtins.max(bits_for(min, self.signed),
+                                          bits_for(max, self.signed))
 
         else:
             if not (min is None and max is None):
