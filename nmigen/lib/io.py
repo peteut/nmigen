@@ -94,7 +94,7 @@ class Pin(Record):
         super().__init__(pin_layout(self.width, self.dir, self.xdr))
 
 
-class DifferentialInput(types.SimpleNamespace):
+class DifferentialInput(Elaboratable, types.SimpleNamespace):
     def __init__(self, shape=None, min=None, max=None, name=None):
         i_p = Signal(shape, min=min, max=max, name=name and name + "_i_p")
         i_n = Signal(shape, min=min, max=max, name=name and name + "_i_n")
@@ -112,7 +112,7 @@ class DifferentialInput(types.SimpleNamespace):
                 self.__class__.__name__, platform))
 
 
-class DifferentialOutput(types.SimpleNamespace):
+class DifferentialOutput(Elaboratable, types.SimpleNamespace):
     def __init__(self, shape=None, min=None, max=None, name=None):
         o_p = Signal(shape, min=min, max=max, name=name and name + "_o_p")
         o_n = Signal(shape, min=min, max=max, name=name and name + "_o_n")
@@ -130,7 +130,7 @@ class DifferentialOutput(types.SimpleNamespace):
                 self.__class__.__name__, platform))
 
 
-class DDRInput(types.SimpleNamespace):
+class DDRInput(Elaboratable, types.SimpleNamespace):
     def __init__(self, shape=None, min=None, max=None, name=None,
                  domain="sync"):
         i = Signal(shape, min=min, max=max, name=name and name + "_i")
@@ -150,7 +150,7 @@ class DDRInput(types.SimpleNamespace):
                 self.__class__.__name__, platform))
 
 
-class DDROutput(types.SimpleNamespace):
+class DDROutput(Elaboratable, types.SimpleNamespace):
     def __init__(self, shape=None, min=None, max=None, name=None,
                  domain="sync"):
         i1 = Signal(shape, min=min, max=max, name=name and name + "_i1")
