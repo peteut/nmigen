@@ -92,9 +92,6 @@ class Pin(Record):
         self.xdr   = xdr
 
         super().__init__(pin_layout(self.width, self.dir, self.xdr))
-        f = m.elaborate(platform)
-        f.flatten = True
-        return f
 
 
 class DifferentialInput(types.SimpleNamespace):
