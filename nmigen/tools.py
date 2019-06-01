@@ -6,7 +6,7 @@ from collections.abc import Iterable
 from contextlib import contextmanager
 
 
-__all__ = ["flatten", "union", "log2_int", "bits_for", "memoize", "final", "deprecated"]
+__all__ = ["flatten", "union", "log2_int", "bits_for", "final", "deprecated"]
 
 
 def flatten(i):
@@ -45,16 +45,6 @@ def bits_for(n, require_sign_bit=False):
     if require_sign_bit:
         r += 1
     return r
-
-
-def memoize(f):
-    memo = OrderedDict()
-    @functools.wraps(f)
-    def g(*args):
-        if args not in memo:
-            memo[args] = f(*args)
-        return memo[args]
-    return g
 
 
 def final(cls):

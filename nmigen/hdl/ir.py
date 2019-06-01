@@ -4,6 +4,7 @@ from functools import reduce
 import warnings
 import traceback
 import sys
+from functools import lru_cache
 
 from ..tools import *
 from .ast import *
@@ -429,7 +430,7 @@ class Fragment:
                 uses[sig] = set()
             uses[sig].add(self)
 
-        @memoize
+        @lru_cache(maxsize=False)
         def lca_of(fragu, fragv):
             # Normalize fragu to be deeper than fragv.
             if level[fragu] < level[fragv]:
