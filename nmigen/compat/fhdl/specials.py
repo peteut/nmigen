@@ -5,13 +5,15 @@ from ...hdl.ast import *
 from ...hdl.ir import Elaboratable
 from ...hdl.mem import Memory as NativeMemory
 from ...hdl.ir import Fragment, Instance
+from ...hdl.dsl import Module
 from .module import Module as CompatModule
+from ...lib.io import Pin
 
 
 __all__ = ["TSTriple", "Instance", "Memory", "READ_FIRST", "WRITE_FIRST", "NO_CHANGE"]
 
 
-class TSTriple(Elaboratable):
+class TSTriple:
     def __init__(self, bits_sign=None, min=None, max=None, reset_o=0, reset_oe=0, reset_i=0,
                  name=None):
         self.o  = Signal(bits_sign, min=min, max=max, reset=reset_o,
@@ -24,9 +26,6 @@ class TSTriple(Elaboratable):
     def __len__(self):
         return len(self.o)
 
-    def elaborate(self, platform):
-        return Fragment()
-
     def get_tristate(self, io):
         return Tristate(io, self.o, self.oe, self.i)
 
@@ -34,22 +33,25 @@ class TSTriple(Elaboratable):
 class Tristate(Elaboratable):
     def __init__(self, target, o, oe, i=None):
         self.target = target
-        self.triple = TSTriple()
-        self.triple.o = o
-        self.triple.oe = oe
-        if i is not None:
-            self.triple.i = i
+        self.o = o
+        self.oe = oe
+        self.i = i if i is not None else None
 
     def elaborate(self, platform):
-        if hasattr(platform, "get_tristate"):
-            return platform.get_tristate(self.triple, self.target)
+        if hasattr(platform, "get_input_output"):
+            pin = Pin(len(self.target), dir="oe" if self.i is None else "io")
+            pin.o = self.o
+            pin.oe = self.oe
+            if self.i is not None:
+                pin.i = self.i
+            return platform.get_input_output(pin, self.target, extras={})
 
         m = Module()
-        m.d.comb += self.triple.i.eq(self.target)
+        m.d.comb += self.i.eq(self.target)
         m.submodules += Instance("$tribuf",
             p_WIDTH=len(self.target),
-            i_EN=self.triple.oe,
-            i_A=self.triple.o,
+            i_EN=self.oe,
+            i_A=self.o,
             o_Y=self.target,
         )
 

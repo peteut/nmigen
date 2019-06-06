@@ -109,6 +109,7 @@ set_output_delay -clock cd_CLK -max 2.000 [get_ports INPUT]
 set_output_delay -clock cd_CLK -min 0.500 [get_ports INPUT]
 """, OutputDelay("CLK", 0.5, 2.).get_xdc("INPUT"))
 
+
 _connector = [
     ("com", "1 2 3"),
     ("com1", [("1 2 3"), ("4 5 6")]),
@@ -193,7 +194,8 @@ class IOProxyTestCase(unittest.TestCase):
                      0: IOProxy(
                          items={
                              "sub": {
-                                 Pins("6"), IOStandard("CMOS"), Misc("foobar")},
+                                 Pins("6"), IOStandard("CMOS"),
+                                 Misc("foobar")},
                              "sub2": {IOStandard("CMOS"), Pins("7")}})}))])
 
 
@@ -237,13 +239,6 @@ class PlatfromTestCase(unittest.TestCase):
         self.assertEqual(
             "com_0 com1_0 com1_1 deep_a deep_b".split(),
             list(map(attrgetter("name"), dut)))
-
-    def test_get_tristate(self):
-        dut = self.dut
-        triple, io_sig = TSTriple(), Signal()
-        tristate = triple.get_tristate(io_sig)
-        with self.assertRaises(NotImplementedError):
-            tristate.elaborate(dut)
 
 
 class ComposeXdcFromSignalTestCase(unittest.TestCase):

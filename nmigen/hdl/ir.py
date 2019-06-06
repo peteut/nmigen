@@ -15,6 +15,8 @@ __all__ = ["Elaboratable", "DriverConflict", "Fragment", "Instance"]
 
 
 class Elaboratable(metaclass=ABCMeta):
+    _Elaboratable__silence = False
+
     def __new__(cls, *args, **kwargs):
         self = super().__new__(cls)
         self._Elaboratable__traceback = traceback.extract_stack()[:-1]
@@ -22,11 +24,22 @@ class Elaboratable(metaclass=ABCMeta):
         return self
 
     def __del__(self):
+        if self._Elaboratable__silence:
+            return
         if hasattr(self, "_Elaboratable__used") and not self._Elaboratable__used:
-            print("Elaboratable created but never used\n",
-                  "Traceback (most recent call last):\n",
+            print("Warning: elaboratable created but never used\n",
+                  "Constructor traceback (most recent call last):\n",
                   *traceback.format_list(self._Elaboratable__traceback),
                   file=sys.stderr, sep="")
+
+
+_old_excepthook = sys.excepthook
+def _silence_elaboratable(type, value, traceback):
+    # Don't show anything if the interpreter crashed; that'd just obscure the exception
+    # traceback instead of helping.
+    Elaboratable._Elaboratable__silence = True
+    _old_excepthook(type, value, traceback)
+sys.excepthook = _silence_elaboratable
 
 
 class DriverConflict(UserWarning):
@@ -361,37 +374,43 @@ class Fragment:
                 else:
                     assert defs[sig] is self
 
-        def add_io(sig):
-            assert sig not in ios
-            ios[sig] = self
+        def add_io(*sigs):
+            for sig in flatten(sigs):
+                if sig not in ios:
+                    ios[sig] = self
+                else:
+                    assert ios[sig] is self
 
         # Collect all signals we're driving (on LHS of statements), and signals we're using
         # (on RHS of statements, or in clock domains).
-        if isinstance(self, Instance):
-            for port_name, (value, dir) in self.named_ports.items():
-                if dir == "i":
-                    add_uses(value._rhs_signals())
-                if dir == "o":
-                    add_defs(value._lhs_signals())
-                if dir == "io":
-                    add_io(value)
-        else:
-            for stmt in self.statements:
-                add_uses(stmt._rhs_signals())
-                add_defs(stmt._lhs_signals())
+        for stmt in self.statements:
+            add_uses(stmt._rhs_signals())
+            add_defs(stmt._lhs_signals())
 
-            for domain, _ in self.iter_sync():
-                cd = self.domains[domain]
-                add_uses(cd.clk)
-                if cd.rst is not None:
-                    add_uses(cd.rst)
+        for domain, _ in self.iter_sync():
+            cd = self.domains[domain]
+            add_uses(cd.clk)
+            if cd.rst is not None:
+                add_uses(cd.rst)
 
         # Repeat for subfragments.
         for subfrag, name in self.subfragments:
-            parent[subfrag] = self
-            level [subfrag] = level[self] + 1
+            if isinstance(subfrag, Instance):
+                for port_name, (value, dir) in subfrag.named_ports.items():
+                    if dir == "i":
+                        subfrag.add_ports(value._rhs_signals(), dir=dir)
+                        add_uses(value._rhs_signals())
+                    if dir == "o":
+                        subfrag.add_ports(value._lhs_signals(), dir=dir)
+                        add_defs(value._lhs_signals())
+                    if dir == "io":
+                        subfrag.add_ports(value._lhs_signals(), dir=dir)
+                        add_io(value._lhs_signals())
+            else:
+                parent[subfrag] = self
+                level [subfrag] = level[self] + 1
 
-            subfrag._prepare_use_def_graph(parent, level, uses, defs, ios, top)
+                subfrag._prepare_use_def_graph(parent, level, uses, defs, ios, top)
 
     def _propagate_ports(self, ports, all_undef_as_ports):
         # Take this fragment graph:
@@ -502,12 +521,22 @@ class Fragment:
 
 
 class Instance(Fragment):
-    def __init__(self, type, **kwargs):
+    def __init__(self, type, *args, **kwargs):
         super().__init__()
 
         self.type        = type
         self.parameters  = OrderedDict()
         self.named_ports = OrderedDict()
+
+        for (kind, name, value) in args:
+            if kind == "p":
+                self.parameters[name] = value
+            elif kind in ("i", "o", "io"):
+                self.named_ports[name] = (value, kind)
+            else:
+                raise NameError("Instance argument {!r} should be a tuple (kind, name, value) "
+                                "where kind is one of \"p\", \"i\", \"o\", or \"io\""
+                                .format((kind, name, value)))
 
         for kw, arg in kwargs.items():
             if kw.startswith("p_"):
@@ -519,5 +548,6 @@ class Instance(Fragment):
             elif kw.startswith("io_"):
                 self.named_ports[kw[3:]] = (arg, "io")
             else:
-                raise NameError("Instance argument '{}' does not start with p_, i_, o_, or io_"
-                                .format(arg))
+                raise NameError("Instance keyword argument {}={!r} does not start with one of "
+                                "\"p_\", \"i_\", \"o_\", or \"io_\""
+                                .format(kw, arg))

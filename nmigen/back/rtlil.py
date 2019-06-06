@@ -881,13 +881,9 @@ def convert_fragment(builder, fragment, hierarchy):
     return module.name, port_map
 
 
-def convert(fragment, name="top", **kwargs):
-    with_meta = kwargs.pop("with_meta", False)
-    fragment = ir.Fragment.get(fragment, platform=None).prepare(**kwargs)
+def convert(fragment, name="top", platform=None, **kwargs):
+    fragment = ir.Fragment.get(fragment, platform).prepare(**kwargs)
     builder = _Builder()
     module_name, port_map = convert_fragment(
         builder, fragment, hierarchy=(name,))
-    if with_meta is True:
-        return str(builder), module_name, port_map
-    else:
-        return str(builder)
+    return str(builder)
