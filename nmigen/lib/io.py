@@ -67,6 +67,8 @@ class Pin(Record):
         are present instead, where ``N in range(0, N)``. For example, if ``xdr=2``, the I/O buffer
         is DDR; the signal ``i0`` reflects the value at the rising edge, and the signal ``i1``
         reflects the value at the falling edge.
+    name : str
+        Name of the underlying record.
 
     Attributes
     ----------
@@ -86,12 +88,12 @@ class Pin(Record):
         I/O buffer output enable. Present if ``dir="io"``. Buffers generally cannot change
         direction more than once per cycle, so at most one output enable signal is present.
     """
-    def __init__(self, width, dir, xdr=1):
+    def __init__(self, width, dir, xdr=1, name=None):
         self.width = width
         self.dir   = dir
         self.xdr   = xdr
 
-        super().__init__(pin_layout(self.width, self.dir, self.xdr))
+        super().__init__(pin_layout(self.width, self.dir, self.xdr), name=name)
 
 
 class DifferentialInput(Elaboratable, types.SimpleNamespace):
