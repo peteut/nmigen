@@ -483,6 +483,8 @@ class SignalTestCase(FHDLTestCase):
         self.assertEqual(s6.shape(), (4, False))
         s7 = [Signal.like(Signal(4))][0]
         self.assertEqual(s7.name, "$like")
+        s8 = Signal.like(s1, name_suffix="_ff")
+        self.assertEqual(s8.name, "s1_ff")
 
 
 class ClockSignalTestCase(FHDLTestCase):
@@ -521,6 +523,26 @@ class ResetSignalTestCase(FHDLTestCase):
     def test_repr(self):
         s1 = ResetSignal()
         self.assertEqual(repr(s1), "(rst sync)")
+
+
+class MockUserValue(UserValue):
+    def __init__(self, lowered):
+        super().__init__()
+        self.lower_count = 0
+        self.lowered     = lowered
+
+    def lower(self):
+        self.lower_count += 1
+        return self.lowered
+
+
+class UserValueTestCase(FHDLTestCase):
+    def test_shape(self):
+        uv = MockUserValue(1)
+        self.assertEqual(uv.shape(), (1, False))
+        uv.lowered = 2
+        self.assertEqual(uv.shape(), (1, False))
+        self.assertEqual(uv.lower_count, 1)
 
 
 class SampleTestCase(FHDLTestCase):
