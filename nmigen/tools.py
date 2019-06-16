@@ -1,9 +1,7 @@
 import contextlib
 import functools
 import warnings
-from collections import OrderedDict
 from collections.abc import Iterable
-from contextlib import contextmanager
 
 
 __all__ = ["flatten", "union", "log2_int", "bits_for", "final", "deprecated"]
@@ -89,4 +87,16 @@ def extend(cls):
         else:
             name = f.__name__
         setattr(cls, name, f)
+    return decorator
+
+
+def _dispatchable(method_name: str):
+    def decorator(f):
+        @functools.wraps(f)
+        def wrapper(that, platform):
+            if hasattr(platform, method_name):
+                return getattr(platform, method_name)(that)
+            else:
+                return f(that, platform)
+        return wrapper
     return decorator

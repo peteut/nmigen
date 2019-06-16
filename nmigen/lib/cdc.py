@@ -1,4 +1,5 @@
 from .. import *
+from ..tools import _dispatchable
 
 
 __all__ = ["MultiReg", "ResetSynchronizer"]
@@ -58,10 +59,8 @@ class MultiReg(Elaboratable):
                              reset=reset, reset_less=reset_less, attrs={"no_retiming": True})
                       for i in range(n)]
 
+    @_dispatchable("get_multi_reg")
     def elaborate(self, platform):
-        if hasattr(platform, "get_multi_reg"):
-            return platform.get_multi_reg(self)
-
         m = Module()
         for i, o in zip((self.i, *self._regs), self._regs):
             m.d[self.odomain] += o.eq(i)
@@ -78,10 +77,8 @@ class ResetSynchronizer(Elaboratable):
                              attrs={"no_retiming": True})
                       for i in range(n)]
 
+    @_dispatchable("get_reset_sync")
     def elaborate(self, platform):
-        if hasattr(platform, "get_reset_sync"):
-            return platform.get_reset_sync(self)
-
         m = Module()
         m.domains += ClockDomain("_reset_sync", async_reset=True)
         for i, o in zip((0, *self._regs), self._regs):
