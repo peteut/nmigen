@@ -320,3 +320,63 @@ class Xilinx7SeriesPlatform(TemplatedPlatform):
                 io_IO=p_port[bit], io_IOB=n_port[bit]
             )
         return m
+
+    def get_multi_reg(self, multireg: Multireg) -> Module:
+        m = Module()
+        dest_sync_ff = len(multireg._regs)
+        if dest_sync_ff not in range(2, 11):
+            raise ValueError(
+                "allowed values for stages: [2, 10], got {}".format(dest_sync_ff))
+
+        m.submodules += Instance(
+            "xpm_cdc_array_single",
+            p_DEST_SYNC_FF=dest_sync_ff,
+            p_SRC_INPUT_REG=0,
+            p_WIDTH=len(multireg.i),
+            i_dest_clk=ClockSignal(multireg.odomain),
+            o_dest_out=multireg.o,
+            i_src_clk=Const(0),
+            i_src_in=multireg.i)
+        return m
+
+    def get_reset_sync(resetsync: ResetSynchronizer) -> Module:
+        m = Module()
+        dest_sync_ff = len(resetsync._regs)
+        if dest_sync_ff not in range(2, 11):
+            raise ValueError(
+                "allowed values for stages: [2, 10], got {}".format(dest_sync_ff))
+
+        reset_sync_cd = "_reset_sync_{}".format(resetsync.domain)
+        m.domains += ClockDomain(reset_sync_cd, async_reset=True)
+        dest_rst = Signal()
+        m.d.comb += [
+            ClockSignal(reset_sync_cd).eq(ClockSignal(resetsync.domain)),
+            ResetSignal(reset_sync_cd).eq(resetsync.arst),
+            ResetSignal(resetsync.domain).eq(dest_rst)]
+        m.submodules += Instance(
+            "xpm_cdc_sync_rst",
+            p_DEST_SYNC_FF=dest_sync_ff,
+            i_dest_clk=ClockSignal(reset_sync_cd),
+            i_src_rst=ResetSignal(reset_sync_cd),
+            o_dest_rst=dest_rst)
+        return m
+
+    def get_pulse_sync(pulse_sync: PulseSynchronizer) -> Module:
+        m = Module()
+        dest_sync_ff = pulse_sync.sync_stages
+        if dest_sync_ff not in range(2, 11):
+            raise ValueError(
+                "allowed values for stages: [2, 10], got {}".format(dest_sync_ff))
+
+        m.submodules += Instance(
+            "xpm_cdc_pulse",
+            p_DEST_SYNC_FF=dest_sync_ff,
+            p_REG_OUTPUT=0,
+            p_RST_USED=0,
+            i_dest_clk=ClockSignal(pulse_sync.odomain),
+            o_dest_pulse=pulse_sync.o,
+            i_dest_rst=Const(0),
+            i_src_clk=ClockSignal(pulse_sync.idomain),
+            i_src_pulse=pulse_sync.i,
+            i_src_rst=Const(0))
+        return m
