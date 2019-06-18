@@ -129,7 +129,7 @@ class LatticeICE40Platform(TemplatedPlatform):
                 i_D=d,
                 o_Q=q)
 
-        def get_i_inverter(y, invert):
+        def get_ixor(y, invert):
             if invert is None:
                 return y
             else:
@@ -144,7 +144,7 @@ class LatticeICE40Platform(TemplatedPlatform):
                         o_O=y[bit])
                 return a
 
-        def get_o_inverter(a, invert):
+        def get_oxor(a, invert):
             if invert is None:
                 return a
             else:
@@ -164,19 +164,20 @@ class LatticeICE40Platform(TemplatedPlatform):
             del attrs["GLOBAL"]
         else:
             is_global_input = False
+        assert not (is_global_input and i_invert)
 
         if "i" in pin.dir:
             if pin.xdr < 2:
-                pin_i  = get_i_inverter(pin.i,  i_invert)
+                pin_i  = get_ixor(pin.i,  i_invert)
             elif pin.xdr == 2:
-                pin_i0 = get_i_inverter(pin.i0, i_invert)
-                pin_i1 = get_i_inverter(pin.i1, i_invert)
+                pin_i0 = get_ixor(pin.i0, i_invert)
+                pin_i1 = get_ixor(pin.i1, i_invert)
         if "o" in pin.dir:
             if pin.xdr < 2:
-                pin_o  = get_o_inverter(pin.o,  o_invert)
+                pin_o  = get_oxor(pin.o,  o_invert)
             elif pin.xdr == 2:
-                pin_o0 = get_o_inverter(pin.o0, o_invert)
-                pin_o1 = get_o_inverter(pin.o1, o_invert)
+                pin_o0 = get_oxor(pin.o0, o_invert)
+                pin_o1 = get_oxor(pin.o1, o_invert)
 
         if "i" in pin.dir and pin.xdr == 2:
             i0_ff = Signal.like(pin_i0, name_suffix="_ff")
@@ -222,7 +223,7 @@ class LatticeICE40Platform(TemplatedPlatform):
 
             if "i" in pin.dir:
                 if pin.xdr == 0 and is_global_input:
-                    io_args.append(("o", "GLOBAL_BUFFER_OUTPUT", pin_i[bit]))
+                    io_args.append(("o", "GLOBAL_BUFFER_OUTPUT", pin.i[bit]))
                 elif pin.xdr < 2:
                     io_args.append(("o", "D_IN_0",  pin_i[bit]))
                 elif pin.xdr == 2:
