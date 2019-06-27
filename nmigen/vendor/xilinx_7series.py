@@ -24,6 +24,7 @@ class Xilinx7SeriesPlatform(TemplatedPlatform):
         * ``script_after_bitstream``: inserts commands after ``write_bitstream`` in Tcl script.
         * ``add_constraints``: inserts commands in XDC file.
         * ``vivado_opts``: adds extra options for Vivado.
+        * ``write_bitstream_opts``: add extra options for ``write_bitstream``.
 
     Build products:
         * ``{{name}}.log``: Vivado log.
@@ -87,7 +88,7 @@ class Xilinx7SeriesPlatform(TemplatedPlatform):
             report_timing_summary -datasheet -max_paths 10 -file {{name}}_timing.rpt
             report_power -file {{name}}_power.rpt
             {{get_override("script_before_bitstream")|default("# (script_before_bitstream placeholder)")}}
-            write_bitstream -force {{name}}.bit
+            write_bitstream -force {{get_override("write_bitstream_opts")|join(" ")}} {{name}}.bit
             {{get_override("script_after_bitstream")|default("# (script_after_bitstream placeholder)")}}
             quit
         """,
