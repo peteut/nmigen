@@ -10,6 +10,9 @@ from ..tools import flatten
 from ..hdl.ast import *
 from ..hdl.ir import *
 from ..hdl.xfrm import ValueVisitor, StatementVisitor
+from ..hdl.ast import DUID
+from ..hdl.dsl import Module
+from ..hdl.cd import ClockDomain
 
 
 __all__ = ["Simulator", "Delay", "Tick", "Passive", "DeadlineError"]
@@ -318,17 +321,23 @@ class _StatementCompiler(StatementVisitor):
     def on_Switch(self, stmt):
         test  = self.rrhs_compiler(stmt.test)
         cases = []
-        for value, stmts in stmt.cases.items():
-            if "-" in value:
-                mask  = "".join("0" if b == "-" else "1" for b in value)
-                value = "".join("0" if b == "-" else  b  for b in value)
+        for values, stmts in stmt.cases.items():
+            if values == ():
+                check = lambda test: True
             else:
-                mask  = "1" * len(value)
-            mask  = int(mask,  2)
-            value = int(value, 2)
-            def make_test(mask, value):
-                return lambda test: test & mask == value
-            cases.append((make_test(mask, value), self.on_statements(stmts)))
+                check = lambda test: False
+                def make_check(mask, value, prev_check):
+                    return lambda test: prev_check(test) or test & mask == value
+                for value in values:
+                    if "-" in value:
+                        mask  = "".join("0" if b == "-" else "1" for b in value)
+                        value = "".join("0" if b == "-" else  b  for b in value)
+                    else:
+                        mask  = "1" * len(value)
+                    mask  = int(mask,  2)
+                    value = int(value, 2)
+                    check = make_check(mask, value, check)
+            cases.append((check, self.on_statements(stmts)))
         def run(state):
             test_value = test(state)
             for check, body in cases:
@@ -345,9 +354,24 @@ class _StatementCompiler(StatementVisitor):
         return run
 
 
+class _SimulatorPlatform:
+    def get_reset_sync(self, reset_sync):
+        m = Module()
+        cd = ClockDomain("_reset_sync_{}".format(DUID().duid), async_reset=True)
+        m.domains += cd
+        for i, o in zip((0, *reset_sync._regs), reset_sync._regs):
+            m.d[cd.name] += o.eq(i)
+        m.d.comb += [
+            ClockSignal(cd.name).eq(ClockSignal(reset_sync.domain)),
+            ResetSignal(cd.name).eq(reset_sync.arst),
+            ResetSignal(reset_sync.domain).eq(reset_sync._regs[-1])
+        ]
+        return m
+
+
 class Simulator:
     def __init__(self, fragment, vcd_file=None, gtkw_file=None, traces=()):
-        self._fragment        = Fragment.get(fragment, platform=None)
+        self._fragment        = Fragment.get(fragment, platform=_SimulatorPlatform())
 
         self._signal_slots    = SignalDict()  # Signal -> int/slot
         self._slot_signals    = list()        # int/slot -> Signal

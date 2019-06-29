@@ -9,13 +9,13 @@ https://codecov.io/gh/peteut/nmigen)
 
 ## A refreshed Python toolbox for building complex digital hardware
 
-**nMigen is incomplete and undergoes rapid development. The nMigen documentation refers to features that may not be implemented yet and compatibility guarantees that may not hold yet. Use at your own risk.**
+**Although nMigen is incomplete and in active development, it can already be used for real-world designs. The nMigen language (`nmigen.ast`, `nmigen.dsl`) will not undergo incompatible changes. The nMigen standard library (`nmigen.lib`) and build system (`nmigen.build`) will undergo minimal changes before their design is finalized.**
 
 Despite being faster than schematics entry, hardware design with Verilog and VHDL remains tedious and inefficient for several reasons. The event-driven model introduces issues and manual coding that are unnecessary for synchronous circuits, which represent the lion's share of today's logic designs. Counterintuitive arithmetic rules result in steeper learning curves and provide a fertile ground for subtle bugs in designs. Finally, support for procedural generation of logic (metaprogramming) through "generate" statements is very limited and restricts the ways code can be made generic, reused and organized.
 
 To address those issues, we have developed the *nMigen FHDL*, a library that replaces the event-driven paradigm with the notions of combinatorial and synchronous statements, has arithmetic rules that make integers always behave like mathematical integers, and most importantly allows the design's logic to be constructed by a Python program. This last point enables hardware designers to take advantage of the richness of the Python language—object oriented programming, function parameters, generators, operator overloading, libraries, etc.—to build well organized, reusable and elegant designs.
 
-Other nMigen libraries are built on FHDL and provide various tools such as a system-on-chip interconnect infrastructure, a dataflow programming system, a more traditional high-level synthesizer that compiles Python routines into state machines with datapaths, and a simulator that allows test benches to be written in Python.
+Other nMigen libraries are built on FHDL and provide various tools and logic cores. nMigen also contains a simulator that allows test benches to be written in Python.
 
 See the [doc/](doc/) folder for more technical information.
 
@@ -28,6 +28,10 @@ Thanks [LambdaConcept][] for being a sponsor of this project! Contact sb [at] m-
 [migen]: https://m-labs.hk/migen
 [yosys]: http://www.clifford.at/yosys/
 [lambdaconcept]: http://lambdaconcept.com/
+
+### HLS?
+
+nMigen is *not* a "Python-to-FPGA" conventional high level synthesis (HLS) tool. It will *not* take a Python program as input and generate a hardware implementation of it. In nMigen, the Python program is executed by a regular Python interpreter, and it emits explicit statements in the FHDL domain-specific language.  Writing a conventional HLS tool that uses nMigen as an internal component might be a good idea, on the other hand :)
 
 ### Installation
 

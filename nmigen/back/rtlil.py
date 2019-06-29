@@ -109,9 +109,11 @@ class _ModuleBuilder(_Namer, _Bufferer):
         self._append("  memory width {} size {} {}\n", width, size, name)
         return name
 
-    def cell(self, kind, name=None, params={}, ports={}, src=""):
+    def cell(self, kind, name=None, params={}, ports={}, attrs={}, src=""):
         self._src(src)
         name = self._make_name(name, local=False)
+        for attr_name, attr_value in attrs.items():
+            self.attribute(attr_name, attr_value)
         self._append("  cell {} {}\n", kind, name)
         for param, value in params.items():
             if isinstance(value, str):
@@ -189,12 +191,12 @@ class _SwitchBuilder:
     def __exit__(self, *args):
         self.rtlil._append("{}end\n", "  " * self.indent)
 
-    def case(self, value=None):
-        if value is None:
+    def case(self, *values):
+        if values == ():
             self.rtlil._append("{}case\n", "  " * (self.indent + 1))
         else:
-            self.rtlil._append("{}case {}'{}\n", "  " * (self.indent + 1),
-                               len(value), value)
+            self.rtlil._append("{}case {}\n", "  " * (self.indent + 1),
+                               ", ".join("{}'{}".format(len(value), value) for value in values))
         return _CaseBuilder(self.rtlil, self.indent + 2)
 
 
@@ -591,10 +593,10 @@ class _StatementCompiler(xfrm.StatementVisitor):
         self._has_rhs     = False
 
     @contextmanager
-    def case(self, switch, value):
+    def case(self, switch, values):
         try:
             old_case = self._case
-            with switch.case(value) as self._case:
+            with switch.case(*values) as self._case:
                 yield
         finally:
             self._case = old_case
@@ -646,8 +648,8 @@ class _StatementCompiler(xfrm.StatementVisitor):
         test_sigspec = self._test_cache[stmt]
 
         with self._case.switch(test_sigspec) as switch:
-            for value, stmts in stmt.cases.items():
-                with self.case(switch, value):
+            for values, stmts in stmt.cases.items():
+                with self.case(switch, values):
                     self.on_statements(stmts)
 
     def on_statement(self, stmt):
@@ -681,7 +683,7 @@ def convert_fragment(builder, fragment, hierarchy):
             return "\\{}".format(fragment.type), port_map
 
     module_name  = hierarchy[-1] or "anonymous"
-    module_attrs = {}
+    module_attrs = OrderedDict()
     if len(hierarchy) == 1:
         module_attrs["top"] = 1
     module_attrs["nmigen.hierarchy"] = ".".join(name or "anonymous" for name in hierarchy)
@@ -764,7 +766,8 @@ def convert_fragment(builder, fragment, hierarchy):
                     compiler_state.resolve_curr(signal, prefix=sub_name)
                 sub_ports[port] = rhs_compiler(value)
 
-            module.cell(sub_type, name=sub_name, ports=sub_ports, params=sub_params)
+            module.cell(sub_type, name=sub_name, ports=sub_ports, params=sub_params,
+                        attrs=subfragment.attrs)
 
         # If we emit all of our combinatorial logic into a single RTLIL process, Verilog
         # simulators will break horribly, because Yosys write_verilog transforms RTLIL processes

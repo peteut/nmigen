@@ -88,12 +88,12 @@ class Case(ast.Switch):
                 raise TypeError("Case object is not a Migen constant")
             if isinstance(k, str) and k == "default":
                 default = v
+                continue
             else:
                 k = k.value
             new_cases.append((k, v))
         if default is not None:
-            k = "-" * len(ast.Value.wrap(test))
-            new_cases.append((k, default))
+            new_cases.append((None, default))
         super().__init__(test, OrderedDict(new_cases))
 
     @deprecated("instead of `Case(...).makedefault()`, use an explicit default case: "
@@ -106,12 +106,12 @@ class Case(ast.Switch):
                         or choice > key):
                     key = choice
         elif isinstance(key, str) and key == "default":
-            key = "-" * len(self.test)
+            key = ()
         else:
-            key = "{:0{}b}".format(wrap(key).value, len(self.test))
+            key = ("{:0{}b}".format(wrap(key).value, len(self.test)),)
         stmts = self.cases[key]
         del self.cases[key]
-        self.cases["-" * len(self.test)] = stmts
+        self.cases[()] = stmts
         return self
 
 
