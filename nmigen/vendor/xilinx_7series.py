@@ -3,6 +3,7 @@ from abc import abstractproperty
 from ..hdl.ast import *
 from ..hdl.dsl import *
 from ..hdl.ir import *
+from ..hdl.cd import *
 from ..build import *
 
 
@@ -336,7 +337,7 @@ class Xilinx7SeriesPlatform(TemplatedPlatform):
             )
         return m
 
-    def get_multi_reg(self, multireg: Multireg) -> Module:
+    def get_multi_reg(self, multireg):
         m = Module()
         dest_sync_ff = len(multireg._regs)
         if dest_sync_ff not in range(2, 11):
@@ -354,7 +355,7 @@ class Xilinx7SeriesPlatform(TemplatedPlatform):
             i_src_in=multireg.i)
         return m
 
-    def get_reset_sync(resetsync: ResetSynchronizer) -> Module:
+    def get_reset_sync(self, resetsync):
         m = Module()
         dest_sync_ff = len(resetsync._regs)
         if dest_sync_ff not in range(2, 11):
@@ -376,7 +377,7 @@ class Xilinx7SeriesPlatform(TemplatedPlatform):
             o_dest_rst=dest_rst)
         return m
 
-    def get_pulse_sync(pulse_sync: PulseSynchronizer) -> Module:
+    def get_pulse_sync(self, pulse_sync):
         m = Module()
         dest_sync_ff = pulse_sync.sync_stages
         if dest_sync_ff not in range(2, 11):
