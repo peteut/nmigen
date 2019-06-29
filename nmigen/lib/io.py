@@ -1,10 +1,8 @@
-import types
 from .. import *
 from ..hdl.rec import *
 
 
-__all__ = ["pin_layout", "Pin",
-           "DifferentialInput", "DifferentialOutput", "DDRInput", "DDROutput"]
+__all__ = ["pin_layout", "Pin"]
 
 
 def pin_layout(width, dir, xdr=0):
@@ -105,79 +103,3 @@ class Pin(Record):
         self.xdr   = xdr
 
         super().__init__(pin_layout(self.width, self.dir, self.xdr), name=name)
-
-
-class DifferentialInput(Elaboratable, types.SimpleNamespace):
-    def __init__(self, shape=None, min=None, max=None, name=None):
-        i_p = Signal(shape, min=min, max=max, name=name and name + "_i_p")
-        i_n = Signal(shape, min=min, max=max, name=name and name + "_i_n")
-        o = Signal(shape, min=min, max=max, name=name and name + "_o")
-        super().__init__(**locals())
-
-    def __len__(self):
-        return len(self.i_p)
-
-    def elaborate(self, platform):
-        try:
-            return platform.get_differential_input(self)
-        except AttributeError:
-            raise NotImplementedError("{} not implemented by {!r}".format(
-                self.__class__.__name__, platform))
-
-
-class DifferentialOutput(Elaboratable, types.SimpleNamespace):
-    def __init__(self, shape=None, min=None, max=None, name=None):
-        o_p = Signal(shape, min=min, max=max, name=name and name + "_o_p")
-        o_n = Signal(shape, min=min, max=max, name=name and name + "_o_n")
-        i = Signal(shape, min=min, max=max, name=name and name + "_i")
-        super().__init__(**locals())
-
-    def __len__(self):
-        return len(self.i)
-
-    def elaborate(self, platform):
-        try:
-            return platform.get_differential_output(self)
-        except AttributeError:
-            raise NotImplementedError("{} not implemented by {!r}".format(
-                self.__class__.__name__, platform))
-
-
-class DDRInput(Elaboratable, types.SimpleNamespace):
-    def __init__(self, shape=None, min=None, max=None, name=None,
-                 domain="sync"):
-        i = Signal(shape, min=min, max=max, name=name and name + "_i")
-        o1 = Signal(shape, min=min, max=max, name=name and name + "_o1")
-        o2 = Signal(shape, min=min, max=max, name=name and name + "_o2")
-        domain = domain
-        super().__init__(**locals())
-
-    def __len__(self):
-        return len(self.i)
-
-    def elaborate(self, platform):
-        try:
-            return platform.get_ddr_input(self)
-        except AttributeError:
-            raise NotImplementedError("{} not implemented by {!r}".format(
-                self.__class__.__name__, platform))
-
-
-class DDROutput(Elaboratable, types.SimpleNamespace):
-    def __init__(self, shape=None, min=None, max=None, name=None,
-                 domain="sync"):
-        i1 = Signal(shape, min=min, max=max, name=name and name + "_i1")
-        i2 = Signal(shape, min=min, max=max, name=name and name + "_i2")
-        o = Signal(shape, min=min, max=max, name=name and name + "_o")
-        domain = domain
-        super().__init__(**locals())
-
-    def __len__(self):
-        return len(self.i1)
-
-    def elaborate(self, platform):
-        try:
-            return platform.get_ddr_output(self)
-        except AttributeError:
-            raise NotImplementedError("{} not implemented by {!r}".format(
-                self.__class__.__name__, platform))

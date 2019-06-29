@@ -1,10 +1,10 @@
 import io
-from collections import OrderedDict
+import textwrap
+from collections import defaultdict, OrderedDict
 from contextlib import contextmanager
 
 from ..tools import bits_for, flatten
 from ..hdl import ast, rec, ir, mem, xfrm
-from ..build import platform
 
 
 __all__ = ["convert"]
@@ -37,7 +37,6 @@ class _Bufferer:
         "\r": "\\r",
         "\n": "\\n",
     })
-
     def __init__(self):
         super().__init__()
         self._buffer = io.StringIO()
@@ -49,9 +48,7 @@ class _Bufferer:
         self._buffer.write(fmt.format(*args, **kwargs))
 
     def attribute(self, name, value, indent=0):
-        if isinstance(value, platform.Constraint):
-            pass
-        elif isinstance(value, str):
+        if isinstance(value, str):
             self._append("{}attribute \\{} \"{}\"\n",
                          "  " * indent, name, value.translate(self._escape_map))
         else:
@@ -888,6 +885,5 @@ def convert_fragment(builder, fragment, hierarchy):
 def convert(fragment, name="top", platform=None, **kwargs):
     fragment = ir.Fragment.get(fragment, platform).prepare(**kwargs)
     builder = _Builder()
-    module_name, port_map = convert_fragment(
-        builder, fragment, hierarchy=(name,))
+    convert_fragment(builder, fragment, hierarchy=(name,))
     return str(builder)
