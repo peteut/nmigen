@@ -355,28 +355,6 @@ class Xilinx7SeriesPlatform(TemplatedPlatform):
             i_src_in=multireg.i)
         return m
 
-    def get_reset_sync(self, resetsync):
-        m = Module()
-        dest_sync_ff = len(resetsync._regs)
-        if dest_sync_ff not in range(2, 11):
-            raise ValueError(
-                "allowed values for stages: [2, 10], got {}".format(dest_sync_ff))
-
-        reset_sync_cd = "_reset_sync_{}".format(resetsync.domain)
-        m.domains += ClockDomain(reset_sync_cd, async_reset=True)
-        dest_rst = Signal()
-        m.d.comb += [
-            ClockSignal(reset_sync_cd).eq(ClockSignal(resetsync.domain)),
-            ResetSignal(reset_sync_cd).eq(resetsync.arst),
-            ResetSignal(resetsync.domain).eq(dest_rst)]
-        m.submodules += Instance(
-            "xpm_cdc_sync_rst",
-            p_DEST_SYNC_FF=dest_sync_ff,
-            i_dest_clk=ClockSignal(reset_sync_cd),
-            i_src_rst=ResetSignal(reset_sync_cd),
-            o_dest_rst=dest_rst)
-        return m
-
     def get_pulse_sync(self, pulse_sync):
         m = Module()
         dest_sync_ff = pulse_sync.sync_stages
