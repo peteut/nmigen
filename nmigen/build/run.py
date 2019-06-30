@@ -1,5 +1,5 @@
 from collections import OrderedDict
-from contextlib import contextmanager
+from contextlib import contextmanager, closing
 import os
 import sys
 import subprocess
@@ -8,6 +8,16 @@ import zipfile
 
 
 __all__ = ["BuildPlan", "BuildProducts"]
+
+
+@contextmanager
+def chdir_root(root):
+    cwd = os.getcwd()
+    try:
+        os.chdir(root)
+        yield
+    finally:
+        os.chdir(cwd)
 
 
 class BuildPlan:
@@ -23,10 +33,7 @@ class BuildPlan:
 
     def execute(self, root="build", run_script=True):
         os.makedirs(root, exist_ok=True)
-        cwd = os.getcwd()
-        try:
-            os.chdir(root)
-
+        with chdir_root(root):
             for filename, content in self.files.items():
                 dirname = os.path.dirname(filename)
                 if dirname:
@@ -43,9 +50,6 @@ class BuildPlan:
                     subprocess.run(["sh", "{}.sh".format(self.script)], check=True)
 
                 return BuildProducts(os.getcwd())
-
-        finally:
-            os.chdir(cwd)
 
     def archive(self, file):
         with zipfile.ZipFile(file, "w") as archive:
@@ -71,11 +75,10 @@ class BuildProducts:
                 # On Windows, a named temporary file (as created by Python) is not accessible to
                 # others if it's still open within the Python process, so we close it and delete
                 # it manually.
-                file = tempfile.NamedTemporaryFile(prefix="nmigen_", suffix="_" + filename,
-                                                   delete=False)
-                files.append(file)
-                file.write(self.get(filename))
-                file.close()
+                with closing(tempfile.NamedTemporaryFile(
+                    prefix="nmigen_", suffix="_" + filename, delete=False)) as file:
+                    files.append(file)
+                    file.write(self.get(filename))
 
             if len(files) == 0:
                 return (yield)
