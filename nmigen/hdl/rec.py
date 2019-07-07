@@ -56,8 +56,15 @@ class Layout:
                 shape = (shape, False)
             self.fields[name] = (shape, direction)
 
-    def __getitem__(self, name):
-        return self.fields[name]
+    def __getitem__(self, item):
+        if isinstance(item, tuple):
+            return Layout([
+                (name, shape, dir)
+                for (name, (shape, dir)) in self.fields.items()
+                if name in item
+            ])
+
+        return self.fields[item]
 
     def __iter__(self):
         for name, (shape, dir) in self.fields.items():
@@ -69,12 +76,22 @@ class Layout:
 
 # Unlike most Values, Record *can* be subclassed.
 class Record(Value):
-    def __init__(self, layout, name=None, *, fields=None):
+    @classmethod
+    def like(cls, other, name=None, name_suffix=None, src_loc_at=0):
+        if name is not None:
+            new_name = str(name)
+        elif name_suffix is not None:
+            new_name = other.name + str(name_suffix)
+        else:
+            new_name = tracer.get_var_name(depth=2 + src_loc_at, default=None)
+        return cls(other.layout, new_name)
+
+    def __init__(self, layout, name=None, src_loc_at=0, *, fields=None):
         if name is None:
-            name = tracer.get_var_name(default=None)
+            name = tracer.get_var_name(depth=2 + src_loc_at, default=None)
 
         self.name    = name
-        self.src_loc = tracer.get_src_loc()
+        self.src_loc = tracer.get_src_loc(src_loc_at)
 
         def concat(a, b):
             if a is None:
@@ -93,9 +110,11 @@ class Record(Value):
                 self.fields[field_name] = field
             else:
                 if isinstance(field_shape, Layout):
-                    self.fields[field_name] = Record(field_shape, name=concat(name, field_name))
+                    self.fields[field_name] = Record(field_shape, name=concat(name, field_name),
+                                                     src_loc_at=src_loc_at + 1)
                 else:
-                    self.fields[field_name] = Signal(field_shape, name=concat(name, field_name))
+                    self.fields[field_name] = Signal(field_shape, name=concat(name, field_name),
+                                                     src_loc_at=src_loc_at + 1)
 
     def __getattr__(self, name):
         return self[name]
@@ -111,6 +130,12 @@ class Record(Value):
                     reference = "Record '{}'".format(self.name)
                 raise AttributeError("{} does not have a field '{}'. Did you mean one of: {}?"
                                      .format(reference, item, ", ".join(self.fields))) from None
+        elif isinstance(item, tuple):
+            return Record(self.layout[item], fields={
+                field_name: field_value
+                for field_name, field_value in self.fields.items()
+                if field_name in item
+            })
         else:
             return super().__getitem__(item)
 

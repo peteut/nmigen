@@ -133,8 +133,14 @@ class Module(_ModuleBuilderRoot, Elaboratable):
                 raise SyntaxError("{} is not permitted outside of {}"
                                   .format(construct, context))
             else:
-                raise SyntaxError("{} is not permitted inside of {}"
-                                  .format(construct, self._ctrl_context))
+                if self._ctrl_context == "Switch":
+                    secondary_context = "Case"
+                if self._ctrl_context == "FSM":
+                    secondary_context = "State"
+                raise SyntaxError("{} is not permitted directly inside of {}; it is permitted "
+                                  "inside of {} {}"
+                                  .format(construct, self._ctrl_context,
+                                          self._ctrl_context, secondary_context))
 
     def _get_ctrl(self, name):
         if self._ctrl_stack:
@@ -248,7 +254,7 @@ class Module(_ModuleBuilderRoot, Elaboratable):
         self._check_context("FSM", context=None)
         fsm_data = self._set_ctrl("FSM", {
             "name":     name,
-            "signal":   Signal(name="{}_state".format(name)),
+            "signal":   Signal(name="{}_state".format(name), src_loc_at=2),
             "reset":    reset,
             "domain":   domain,
             "encoding": OrderedDict(),
@@ -304,6 +310,10 @@ class Module(_ModuleBuilderRoot, Elaboratable):
         raise SyntaxError("`m.next = <...>` is only permitted inside an FSM state")
 
     def _pop_ctrl(self):
+        # FIXME: the src_loc extraction unfortunately doesn't work very well here; src_loc_at=3 is
+        # correct, but the resulting src_loc points at the *last* line of the `with` block.
+        # Unfortunately, it is not clear how this can be fixed.
+
         name, data = self._ctrl_stack.pop()
 
         if name == "If":
@@ -323,16 +333,18 @@ class Module(_ModuleBuilderRoot, Elaboratable):
                     match = None
                 cases[match] = if_case
 
-            self._statements.append(Switch(Cat(tests), cases))
+            self._statements.append(Switch(Cat(tests), cases, src_loc_at=3))
 
         if name == "Switch":
             switch_test, switch_cases = data["test"], data["cases"]
 
-            self._statements.append(Switch(switch_test, switch_cases))
+            self._statements.append(Switch(switch_test, switch_cases, src_loc_at=3))
 
         if name == "FSM":
             fsm_signal, fsm_reset, fsm_encoding, fsm_decoding, fsm_states = \
                 data["signal"], data["reset"], data["encoding"], data["decoding"], data["states"]
+            if not fsm_states:
+                return
             fsm_signal.nbits = bits_for(len(fsm_encoding) - 1)
             if fsm_reset is None:
                 fsm_signal.reset = fsm_encoding[next(iter(fsm_states))]
@@ -342,7 +354,8 @@ class Module(_ModuleBuilderRoot, Elaboratable):
             fsm_decoding.update((n, s) for s, n in fsm_encoding.items())
             fsm_signal.decoder = lambda n: "{}/{}".format(fsm_decoding[n], n)
             self._statements.append(Switch(fsm_signal,
-                OrderedDict((fsm_encoding[name], stmts) for name, stmts in fsm_states.items())))
+                OrderedDict((fsm_encoding[name], stmts) for name, stmts in fsm_states.items()),
+                src_loc_at=3))
 
     def _add_statement(self, assigns, domain, depth, compat_mode=False):
         def domain_name(domain):

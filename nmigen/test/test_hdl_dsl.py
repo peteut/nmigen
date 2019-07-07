@@ -345,7 +345,8 @@ class DSLTestCase(FHDLTestCase):
         m = Module()
         with m.Switch(self.s1):
             with self.assertRaises(SyntaxError,
-                    msg="If is not permitted inside of Switch"):
+                    msg="If is not permitted directly inside of Switch; "
+                        "it is permitted inside of Switch Case"):
                 with m.If(self.s2):
                     pass
 
@@ -449,6 +450,14 @@ class DSLTestCase(FHDLTestCase):
         )
         """)
 
+    def test_FSM_empty(self):
+        m = Module()
+        with m.FSM():
+            pass
+        self.assertRepr(m._statements, """
+        ()
+        """)
+
     def test_FSM_wrong_redefined(self):
         m = Module()
         with m.FSM():
@@ -471,6 +480,17 @@ class DSLTestCase(FHDLTestCase):
                 msg="`m.next = <...>` is only permitted inside an FSM state"):
             with m.FSM():
                 m.next = "FOO"
+
+    def test_If_inside_FSM_wrong(self):
+        m = Module()
+        with m.FSM():
+            with m.State("FOO"):
+                pass
+            with self.assertRaises(SyntaxError,
+                    msg="If is not permitted directly inside of FSM; "
+                        "it is permitted inside of FSM State"):
+                with m.If(self.s2):
+                    pass
 
     def test_auto_pop_ctrl(self):
         m = Module()

@@ -55,9 +55,9 @@ class _Bufferer:
             self._append("{}attribute \\{} {}\n",
                          "  " * indent, name, int(value))
 
-    def _src(self, src):
+    def _src(self, src, **kwargs):
         if src:
-            self.attribute("src", src)
+            self.attribute("src", src, **kwargs)
 
 
 class _Builder(_Namer, _Bufferer):
@@ -142,7 +142,7 @@ class _ProcessBuilder(_Bufferer):
         self.src   = src
 
     def __enter__(self):
-        self._src(self.src)
+        self._src(self.src, indent=1)
         self._append("  process {}\n", self.name)
         return self
 
@@ -222,6 +222,10 @@ def src(src_loc):
     return "{}:{}".format(file, line)
 
 
+def srcs(src_locs):
+    return "|".join(sorted(map(src, src_locs)))
+
+
 class LegalizeValue(Exception):
     def __init__(self, value, branches):
         self.value    = value
@@ -269,8 +273,8 @@ class _ValueCompilerState:
         wire_curr = self.rtlil.wire(width=signal.nbits, name=wire_name,
                                     port_id=port_id, port_kind=port_kind,
                                     src=src(signal.src_loc))
-        if signal in self.driven:
-            wire_next = self.rtlil.wire(width=signal.nbits, name="$next" + wire_curr,
+        if signal in self.driven and self.driven[signal]:
+            wire_next = self.rtlil.wire(width=signal.nbits, name=wire_curr + "$next",
                                         src=src(signal.src_loc))
         else:
             wire_next = None
@@ -559,10 +563,10 @@ class _LHSValueCompiler(_ValueCompiler):
         return self(value)
 
     def on_Signal(self, value):
-        wire_curr, wire_next = self.s.resolve(value)
-        if wire_next is None:
+        if value not in self.s.driven:
             raise ValueError("No LHS wire for non-driven signal {}".format(repr(value)))
-        return wire_next
+        wire_curr, wire_next = self.s.resolve(value)
+        return wire_next or wire_curr
 
     def _prepare_value_for_Slice(self, value):
         assert isinstance(value, (ast.Signal, ast.Slice, ast.Cat, rec.Record))
@@ -577,6 +581,34 @@ class _LHSValueCompiler(_ValueCompiler):
 
     def on_Repl(self, value):
         raise TypeError # :nocov:
+
+
+class _StatementLocator(xfrm.StatementVisitor):
+    def __init__(self):
+        self.src_locs = set()
+
+    def on_Assign(self, stmt):
+        self.src_locs.add(stmt.src_loc)
+
+    def on_Switch(self, stmt):
+        self.src_locs.add(stmt.src_loc)
+        for stmts in stmt.cases.values():
+            self.on_statements(stmts)
+
+    def on_ignored(self, stmt):
+        pass
+
+    on_Assert = on_ignored
+    on_Assume = on_ignored
+
+    def on_statements(self, stmts):
+        for stmt in stmts:
+            self.on_statement(stmt)
+
+    def __call__(self, stmt):
+        self.on_statement(stmt)
+        src_locs, self.src_locs = self.src_locs, set()
+        return src_locs
 
 
 class _StatementCompiler(xfrm.StatementVisitor):
@@ -689,13 +721,14 @@ def convert_fragment(builder, fragment, hierarchy):
         compiler_state = _ValueCompilerState(module)
         rhs_compiler   = _RHSValueCompiler(compiler_state)
         lhs_compiler   = _LHSValueCompiler(compiler_state)
+        stmt_locator   = _StatementLocator()
         stmt_compiler  = _StatementCompiler(compiler_state, rhs_compiler, lhs_compiler)
 
         verilog_trigger = None
         verilog_trigger_sync_emitted = False
 
         # Register all signals driven in the current fragment. This must be done first, as it
-        # affects further codegen; e.g. whether $next\sig signals will be generated and used.
+        # affects further codegen; e.g. whether \sig$next signals will be generated and used.
         for domain, signal in fragment.iter_drivers():
             compiler_state.add_driven(signal, sync=domain is not None)
 
@@ -778,11 +811,13 @@ def convert_fragment(builder, fragment, hierarchy):
 
         for group, group_signals in lhs_grouper.groups().items():
             lhs_group_filter = xfrm.LHSGroupFilter(group_signals)
+            group_stmts = lhs_group_filter(fragment.statements)
 
-            with module.process(name="$group_{}".format(group)) as process:
+            with module.process(name="$group_{}".format(group),
+                                src=srcs(stmt_locator(group_stmts))) as process:
                 with process.case() as case:
-                    # For every signal in comb domain, assign $next\sig to the reset value.
-                    # For every signal in sync domains, assign $next\sig to the current
+                    # For every signal in comb domain, assign \sig$next to the reset value.
+                    # For every signal in sync domains, assign \sig$next to the current
                     # value (\sig).
                     for domain, signal in fragment.iter_drivers():
                         if signal not in group_signals:
@@ -796,7 +831,7 @@ def convert_fragment(builder, fragment, hierarchy):
                     # Convert statements into decision trees.
                     stmt_compiler._case = case
                     stmt_compiler._has_rhs = False
-                    stmt_compiler(lhs_group_filter(fragment.statements))
+                    stmt_compiler(group_stmts)
 
                     # Verilog `always @*` blocks will not run if `*` does not match anything, i.e.
                     # if the implicit sensitivity list is empty. We check this while translating,
@@ -824,23 +859,24 @@ def convert_fragment(builder, fragment, hierarchy):
                         sync.update(verilog_trigger, "1'0")
                         verilog_trigger_sync_emitted = True
 
-                # For every signal in every domain, assign \sig to $next\sig. The sensitivity list,
-                # however, differs between domains: for comb domains, it is `always`, for sync
-                # domains with sync reset, it is `posedge clk`, for sync domains with async reset
-                # it is `posedge clk or posedge rst`.
+                # For every signal in every sync domain, assign \sig to \sig$next. The sensitivity
+                # list, however, differs between domains: for domains with sync reset, it is
+                # `posedge clk`, for sync domains with async reset it is `posedge clk or
+                # posedge rst`.
                 for domain, signals in fragment.drivers.items():
+                    if domain is None:
+                        continue
+
                     signals = signals & group_signals
                     if not signals:
                         continue
 
+                    cd = fragment.domains[domain]
+
                     triggers = []
-                    if domain is None:
-                        triggers.append(("always",))
-                    else:
-                        cd = fragment.domains[domain]
-                        triggers.append(("posedge", compiler_state.resolve_curr(cd.clk)))
-                        if cd.async_reset:
-                            triggers.append(("posedge", compiler_state.resolve_curr(cd.rst)))
+                    triggers.append(("posedge", compiler_state.resolve_curr(cd.clk)))
+                    if cd.async_reset:
+                        triggers.append(("posedge", compiler_state.resolve_curr(cd.rst)))
 
                     for trigger in triggers:
                         with process.sync(*trigger) as sync:
