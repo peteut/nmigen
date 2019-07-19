@@ -14,6 +14,9 @@ class Xilinx7SeriesPlatform(TemplatedPlatform):
     Required tools:
         * ``vivado``
 
+    The environment is populated by running the script specified in the environment variable
+    ``NMIGEN_Vivado_env``, if present.
+
     Available overrides:
         * ``script_after_read``: inserts commands after ``read_xdc`` in Tcl script.
         * ``script_after_synth``: inserts commands after ``synth_design`` in Tcl script.
@@ -39,8 +42,11 @@ class Xilinx7SeriesPlatform(TemplatedPlatform):
         * ``{{name}}_timing.rpt``: Vivado report.
         * ``{{name}}_power.rpt``: Vivado report.
         * ``{{name}}_route.dcp``: Vivado design checkpoint.
-        * ``{{name}}.bit``: binary bitstream.
+        * ``{{name}}.bit``: binary bitstream with metadata.
+        * ``{{name}}.bin``: binary bitstream.
     """
+
+    toolchain = "Vivado"
 
     device  = abstractproperty()
     package = abstractproperty()
@@ -87,7 +93,7 @@ class Xilinx7SeriesPlatform(TemplatedPlatform):
             report_timing_summary -datasheet -max_paths 10 -file {{name}}_timing.rpt
             report_power -file {{name}}_power.rpt
             {{get_override("script_before_bitstream")|default("# (script_before_bitstream placeholder)")}}
-            write_bitstream -force {{name}}.bit
+            write_bitstream -force -bin_file {{name}}.bit
             {{get_override("script_after_bitstream")|default("# (script_after_bitstream placeholder)")}}
             quit
         """,

@@ -59,6 +59,11 @@ class PinsTestCase(FHDLTestCase):
                     "connector pin pmod_0:1"):
             p.map_names(mapping, p)
 
+    def test_wrong_assert_width(self):
+        with self.assertRaises(AssertionError,
+                msg="3 names are specified (0 1 2), but 4 names are expected"):
+            Pins("0 1 2", assert_width=4)
+
 
 class DiffPairsTestCase(FHDLTestCase):
     def test_basic(self):
@@ -96,6 +101,11 @@ class DiffPairsTestCase(FHDLTestCase):
                     "and (pins io B0 B1) do not"):
             dp = DiffPairs("A0", "B0 B1")
 
+    def test_wrong_assert_width(self):
+        with self.assertRaises(AssertionError,
+                msg="3 names are specified (0 1 2), but 4 names are expected"):
+            DiffPairs("0 1 2", "3 4 5", assert_width=4)
+
 
 class AttrsTestCase(FHDLTestCase):
     def test_basic(self):
@@ -103,9 +113,20 @@ class AttrsTestCase(FHDLTestCase):
         self.assertEqual(a["IO_STANDARD"], "LVCMOS33")
         self.assertEqual(repr(a), "(attrs IO_STANDARD=LVCMOS33 PULLUP=1)")
 
+    def test_remove(self):
+        a = Attrs(FOO=None)
+        self.assertEqual(a["FOO"], None)
+        self.assertEqual(repr(a), "(attrs !FOO)")
+
+    def test_callable(self):
+        fn = lambda self: "FOO"
+        a = Attrs(FOO=fn)
+        self.assertEqual(a["FOO"], fn)
+        self.assertEqual(repr(a), "(attrs FOO={!r})".format(fn))
+
     def test_wrong_value(self):
         with self.assertRaises(TypeError,
-                msg="Attribute value must be a string, not 1"):
+                msg="Value of attribute FOO must be None, str, or callable, not 1"):
             a = Attrs(FOO=1)
 
 
@@ -203,6 +224,21 @@ class ResourceTestCase(FHDLTestCase):
                                   " (subsignal tx (pins o A0))"
                                   " (subsignal rx (pins i A1))"
                                   " (attrs IOSTANDARD=LVCMOS33))")
+
+    def test_family(self):
+        ios = [Subsignal("clk", Pins("A0", dir="o"))]
+        r1  = Resource.family(0, default_name="spi", ios=ios)
+        r2  = Resource.family("spi_flash", 0, default_name="spi", ios=ios)
+        r3  = Resource.family("spi_flash", 0, default_name="spi", ios=ios, name_suffix="4x")
+        r4  = Resource.family(0, default_name="spi", ios=ios, name_suffix="2x")
+        self.assertEqual(r1.name, "spi")
+        self.assertEqual(r1.ios, ios)
+        self.assertEqual(r2.name, "spi_flash")
+        self.assertEqual(r2.ios, ios)
+        self.assertEqual(r3.name, "spi_flash_4x")
+        self.assertEqual(r3.ios, ios)
+        self.assertEqual(r4.name, "spi_2x")
+        self.assertEqual(r4.ios, ios)
 
 
 class ConnectorTestCase(FHDLTestCase):

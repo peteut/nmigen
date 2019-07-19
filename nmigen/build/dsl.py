@@ -6,7 +6,7 @@ __all__ = ["Pins", "PinsN", "DiffPairs", "DiffPairsN",
 
 
 class Pins:
-    def __init__(self, names, *, dir="io", conn=None):
+    def __init__(self, names, *, dir="io", conn=None, assert_width=None):
         if not isinstance(names, str):
             raise TypeError("Names must be a whitespace-separated string, not {!r}"
                             .format(names))
@@ -22,6 +22,10 @@ class Pins:
         if dir not in ("i", "o", "io", "oe"):
             raise TypeError("Direction must be one of \"i\", \"o\", \"oe\", or \"io\", not {!r}"
                             .format(dir))
+
+        if assert_width is not None and len(names) != assert_width:
+            raise AssertionError("{} names are specified ({}), but {} names are expected"
+                                 .format(len(names), " ".join(names), assert_width))
 
         self.names  = names
         self.dir    = dir
@@ -56,9 +60,9 @@ def PinsN(*args, **kwargs):
 
 
 class DiffPairs:
-    def __init__(self, p, n, *, dir="io", conn=None):
-        self.p = Pins(p, dir=dir, conn=conn)
-        self.n = Pins(n, dir=dir, conn=conn)
+    def __init__(self, p, n, *, dir="io", conn=None, assert_width=None):
+        self.p = Pins(p, dir=dir, conn=conn, assert_width=assert_width)
+        self.n = Pins(n, dir=dir, conn=conn, assert_width=assert_width)
 
         if len(self.p.names) != len(self.n.names):
             raise TypeError("Positive and negative pins must have the same width, but {!r} "
@@ -87,16 +91,23 @@ def DiffPairsN(*args, **kwargs):
 
 class Attrs(OrderedDict):
     def __init__(self, **attrs):
-        for attr_key, attr_value in attrs.items():
-            if not isinstance(attr_value, str):
-                raise TypeError("Attribute value must be a string, not {!r}"
-                                .format(attr_value))
+        for key, value in attrs.items():
+            if not (value is None or isinstance(value, str) or hasattr(value, "__call__")):
+                raise TypeError("Value of attribute {} must be None, str, or callable, not {!r}"
+                                .format(key, value))
 
         super().__init__(**attrs)
 
     def __repr__(self):
-        return "(attrs {})".format(" ".join("{}={}".format(k, v)
-                                    for k, v in self.items()))
+        items = []
+        for key, value in self.items():
+            if value is None:
+                items.append("!" + key)
+            elif hasattr(value, "__call__"):
+                items.append(key + "=" + repr(value))
+            else:
+                items.append(key + "=" + value)
+        return "(attrs {})".format(" ".join(items))
 
 
 class Clock:
@@ -170,6 +181,25 @@ class Subsignal:
 
 
 class Resource(Subsignal):
+    @classmethod
+    def family(cls, name_or_number, number=None, *, ios, default_name, name_suffix=""):
+        # This constructor accepts two different forms:
+        #  1. Number-only form:
+        #       Resource.family(0, default_name="name", ios=[Pins("A0 A1")])
+        #  2. Name-and-number (name override) form:
+        #       Resource.family("override", 0, default_name="name", ios=...)
+        # This makes it easier to build abstractions for resources, e.g. an SPIResource abstraction
+        # could simply delegate to `Resource.family(*args, default_name="spi", ios=ios)`.
+        # The name_suffix argument is meant to support creating resources with
+        # similar names, such as spi_flash, spi_flash_2x, etc.
+        if name_suffix:  # Only add "_" if we actually have a suffix.
+            name_suffix = "_" + name_suffix
+
+        if number is None: # name_or_number is number
+            return cls(default_name + name_suffix, name_or_number, *ios)
+        else: # name_or_number is name
+            return cls(name_or_number + name_suffix, number, *ios)
+
     def __init__(self, name, number, *args):
         super().__init__(name, *args)
 
