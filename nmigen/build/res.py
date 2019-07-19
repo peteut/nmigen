@@ -103,6 +103,15 @@ class ResourceManager:
             return dir, xdr
 
         def resolve(resource, dir, xdr, name, attrs):
+            for attr_key, attr_value in attrs.items():
+                if hasattr(attr_value, "__call__"):
+                    attr_value = attr_value(self)
+                    assert attr_value is None or isinstance(attr_value, str)
+                if attr_value is None:
+                    del attrs[attr_key]
+                else:
+                    attrs[attr_key] = attr_value
+
             if isinstance(resource.ios[0], Subsignal):
                 fields = OrderedDict()
                 for sub in resource.ios:

@@ -37,6 +37,7 @@ def convert(*args, strip_src=False, **kwargs):
 read_ilang <<rtlil
 {}
 rtlil
+proc_prune
 proc_init
 proc_arst
 proc_dff

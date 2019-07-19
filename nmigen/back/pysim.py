@@ -543,7 +543,7 @@ class Simulator:
                 if signal.decoder:
                     var_type = "string"
                     var_size = 1
-                    var_init = signal.decoder(signal.reset).replace(" ", "_")
+                    var_init = signal.decoder(signal.reset).expandtabs().replace(" ", "_")
                 else:
                     var_type = "wire"
                     var_size = signal.nbits
@@ -649,7 +649,7 @@ class Simulator:
             for vcd_signal in self._vcd_signals[signal_slot]:
                 signal = self._slot_signals[signal_slot]
                 if signal.decoder:
-                    var_value = signal.decoder(new).replace(" ", "_")
+                    var_value = signal.decoder(new).expandtabs().replace(" ", "_")
                 else:
                     var_value = new
                 vcd_timestamp = (self._timestamp + self._delta) / self._epsilon
@@ -849,7 +849,7 @@ class Simulator:
             def add_trace(signal, **kwargs):
                 signal_slot = self._signal_slots[signal]
                 if self._vcd_names[signal_slot] is not None:
-                    if len(signal) > 1:
+                    if len(signal) > 1 and not signal.decoder:
                         suffix = "[{}:0]".format(len(signal) - 1)
                     else:
                         suffix = ""

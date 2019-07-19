@@ -3,6 +3,7 @@ from collections import OrderedDict
 from collections.abc import Iterable
 
 from ..tools import flatten
+from .. import tracer
 from .ast import *
 from .ast import _StatementList
 from .cd import *
@@ -80,6 +81,9 @@ class ValueVisitor(metaclass=ABCMeta):
     def on_unknown_value(self, value):
         raise TypeError("Cannot transform value '{!r}'".format(value)) # :nocov:
 
+    def replace_value_src_loc(self, value, new_value):
+        return True
+
     def on_value(self, value):
         if type(value) is Const:
             new_value = self.on_Const(value)
@@ -116,7 +120,7 @@ class ValueVisitor(metaclass=ABCMeta):
             new_value = self.on_value(value._lazy_lower())
         else:
             new_value = self.on_unknown_value(value)
-        if isinstance(new_value, Value):
+        if isinstance(new_value, Value) and self.replace_value_src_loc(value, new_value):
             new_value.src_loc = value.src_loc
         return new_value
 
@@ -193,6 +197,9 @@ class StatementVisitor(metaclass=ABCMeta):
     def on_unknown_statement(self, stmt):
         raise TypeError("Cannot transform statement '{!r}'".format(stmt)) # :nocov:
 
+    def replace_statement_src_loc(self, stmt, new_stmt):
+        return True
+
     def on_statement(self, stmt):
         if type(stmt) is Assign:
             new_stmt = self.on_Assign(stmt)
@@ -207,8 +214,10 @@ class StatementVisitor(metaclass=ABCMeta):
             new_stmt = self.on_statements(stmt)
         else:
             new_stmt = self.on_unknown_statement(stmt)
-        if hasattr(stmt, "src_loc") and hasattr(new_stmt, "src_loc"):
+        if isinstance(new_stmt, Statement) and self.replace_statement_src_loc(stmt, new_stmt):
             new_stmt.src_loc = stmt.src_loc
+            if isinstance(new_stmt, Switch) and isinstance(stmt, Switch):
+                new_stmt.case_src_locs = stmt.case_src_locs
         return new_stmt
 
     def __call__(self, stmt):
@@ -319,6 +328,11 @@ class DomainRenamer(FragmentTransformer, ValueTransformer, StatementTransformer)
     def __init__(self, domain_map):
         if isinstance(domain_map, str):
             domain_map = {"sync": domain_map}
+        for src, dst in domain_map.items():
+            if src == "comb":
+                raise ValueError("Domain '{}' may not be renamed".format(src))
+            if dst == "comb":
+                raise ValueError("Domain '{}' may not be renamed to '{}'".format(src, dst))
         self.domain_map = OrderedDict(domain_map)
 
     def on_ClockSignal(self, value):
@@ -363,6 +377,9 @@ class DomainLowerer(FragmentTransformer, ValueTransformer, StatementTransformer)
     def map_drivers(self, fragment, new_fragment):
         for domain, signal in fragment.iter_drivers():
             new_fragment.add_driver(self.on_value(signal), domain)
+
+    def replace_value_src_loc(self, value, new_value):
+        return not isinstance(value, (ClockSignal, ResetSignal))
 
     def on_ClockSignal(self, value):
         cd = self._resolve(value.domain, value)
@@ -533,6 +550,7 @@ class LHSGroupFilter(SwitchCleaner):
 
 class _ControlInserter(FragmentTransformer):
     def __init__(self, controls):
+        self.src_loc = None
         if isinstance(controls, Value):
             controls = {"sync": controls}
         self.controls = OrderedDict(controls)
@@ -548,14 +566,17 @@ class _ControlInserter(FragmentTransformer):
     def _insert_control(self, fragment, domain, signals):
         raise NotImplementedError # :nocov:
 
+    def __call__(self, value):
+        self.src_loc = tracer.get_src_loc()
+        return super().__call__(value)
 
 class ResetInserter(_ControlInserter):
     def _insert_control(self, fragment, domain, signals):
         stmts = [s.eq(Const(s.reset, s.nbits)) for s in signals if not s.reset_less]
-        fragment.add_statements(Switch(self.controls[domain], {1: stmts}))
+        fragment.add_statements(Switch(self.controls[domain], {1: stmts}, src_loc=self.src_loc))
 
 
 class CEInserter(_ControlInserter):
     def _insert_control(self, fragment, domain, signals):
         stmts = [s.eq(s) for s in signals]
-        fragment.add_statements(Switch(self.controls[domain], {0: stmts}))
+        fragment.add_statements(Switch(self.controls[domain], {0: stmts}, src_loc=self.src_loc))
