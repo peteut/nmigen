@@ -227,12 +227,14 @@ class _SyncBuilder(_ProxiedBuilder):
 
 
 def src(src_loc):
+    if src_loc is None:
+        return None
     file, line = src_loc
     return "{}:{}".format(file, line)
 
 
 def srcs(src_locs):
-    return "|".join(sorted(map(src, src_locs)))
+    return "|".join(sorted(filter(lambda x: x, map(src, src_locs))))
 
 
 class LegalizeValue(Exception):
@@ -402,7 +404,7 @@ class _RHSValueCompiler(_ValueCompiler):
             return self.s.anys[value]
 
         res_bits, res_sign = value.shape()
-        res = self.s.rtlil.wire(width=res_bits)
+        res = self.s.rtlil.wire(width=res_bits, src=src(value.src_loc))
         self.s.rtlil.cell("$anyconst", ports={
             "\\Y": res,
         }, params={
@@ -416,7 +418,7 @@ class _RHSValueCompiler(_ValueCompiler):
             return self.s.anys[value]
 
         res_bits, res_sign = value.shape()
-        res = self.s.rtlil.wire(width=res_bits)
+        res = self.s.rtlil.wire(width=res_bits, src=src(value.src_loc))
         self.s.rtlil.cell("$anyseq", ports={
             "\\Y": res,
         }, params={
@@ -433,7 +435,7 @@ class _RHSValueCompiler(_ValueCompiler):
         arg, = value.operands
         arg_bits, arg_sign = arg.shape()
         res_bits, res_sign = value.shape()
-        res = self.s.rtlil.wire(width=res_bits)
+        res = self.s.rtlil.wire(width=res_bits, src=src(value.src_loc))
         self.s.rtlil.cell(self.operator_map[(1, value.op)], ports={
             "\\A": self(arg),
             "\\Y": res,
@@ -452,7 +454,7 @@ class _RHSValueCompiler(_ValueCompiler):
         if new_bits <= value_bits:
             return self(ast.Slice(value, 0, new_bits))
 
-        res = self.s.rtlil.wire(width=new_bits)
+        res = self.s.rtlil.wire(width=new_bits, src=src(value.src_loc))
         self.s.rtlil.cell("$pos", ports={
             "\\A": self(value),
             "\\Y": res,
@@ -476,7 +478,7 @@ class _RHSValueCompiler(_ValueCompiler):
             lhs_wire = self.match_shape(lhs, lhs_bits, lhs_sign)
             rhs_wire = self.match_shape(rhs, rhs_bits, rhs_sign)
         res_bits, res_sign = value.shape()
-        res = self.s.rtlil.wire(width=res_bits)
+        res = self.s.rtlil.wire(width=res_bits, src=src(value.src_loc))
         self.s.rtlil.cell(self.operator_map[(2, value.op)], ports={
             "\\A": lhs_wire,
             "\\B": rhs_wire,
@@ -498,7 +500,7 @@ class _RHSValueCompiler(_ValueCompiler):
         val1_bits = val0_bits = res_bits = max(val1_bits, val0_bits, res_bits)
         val1_wire = self.match_shape(val1, val1_bits, val1_sign)
         val0_wire = self.match_shape(val0, val0_bits, val0_sign)
-        res = self.s.rtlil.wire(width=res_bits)
+        res = self.s.rtlil.wire(width=res_bits, src=src(value.src_loc))
         self.s.rtlil.cell("$mux", ports={
             "\\A": val0_wire,
             "\\B": val1_wire,
@@ -524,16 +526,18 @@ class _RHSValueCompiler(_ValueCompiler):
         if isinstance(value, (ast.Signal, ast.Slice, ast.Cat)):
             sigspec = self(value)
         else:
-            sigspec = self.s.rtlil.wire(len(value))
+            sigspec = self.s.rtlil.wire(len(value), src=src(value.src_loc))
             self.s.rtlil.connect(sigspec, self(value))
         return sigspec
 
     def on_Part(self, value):
         lhs, rhs = value.value, value.offset
+        if value.stride != 1:
+            rhs *= value.stride
         lhs_bits, lhs_sign = lhs.shape()
         rhs_bits, rhs_sign = rhs.shape()
         res_bits, res_sign = value.shape()
-        res = self.s.rtlil.wire(width=res_bits)
+        res = self.s.rtlil.wire(width=res_bits, src=src(value.src_loc))
         # Note: Verilog's x[o+:w] construct produces a $shiftx cell, not a $shift cell.
         # However, Migen's semantics defines the out-of-range bits to be zero, so it is correct
         # to use a $shift cell here instead, even though it produces less idiomatic Verilog.
@@ -568,8 +572,15 @@ class _LHSValueCompiler(_ValueCompiler):
         raise TypeError # :nocov:
 
     def match_shape(self, value, new_bits, new_sign):
-        assert value.shape() == (new_bits, new_sign)
-        return self(value)
+        value_bits, value_sign = value.shape()
+        if new_bits == value_bits:
+            return self(value)
+        elif new_bits < value_bits:
+            return self(ast.Slice(value, 0, new_bits))
+        else: # new_bits > value_bits
+            dummy_bits = new_bits - value_bits
+            dummy_wire = self.s.rtlil.wire(dummy_bits)
+            return "{{ {} {} }}".format(dummy_wire, self(value))
 
     def on_Signal(self, value):
         if value not in self.s.driven:
@@ -601,6 +612,7 @@ class _StatementCompiler(xfrm.StatementVisitor):
         self._case        = None
         self._test_cache  = {}
         self._has_rhs     = False
+        self._wrap_assign = False
 
     @contextmanager
     def case(self, switch, values, attrs={}, src=""):
@@ -626,7 +638,15 @@ class _StatementCompiler(xfrm.StatementVisitor):
             # In RTLIL, LHS and RHS of assignment must have exactly same width.
             rhs_sigspec = self.rhs_compiler.match_shape(
                 stmt.rhs, lhs_bits, lhs_sign)
-        self._case.assign(self.lhs_compiler(stmt.lhs), rhs_sigspec)
+        if self._wrap_assign:
+            # In RTLIL, all assigns are logically sequenced before all switches, even if they are
+            # interleaved in the source. In nMigen, the source ordering is used. To handle this
+            # mismatch, we wrap all assigns following a switch in a dummy switch.
+            with self._case.switch("{ }") as wrap_switch:
+                with wrap_switch.case() as wrap_case:
+                    wrap_case.assign(self.lhs_compiler(stmt.lhs), rhs_sigspec)
+        else:
+            self._case.assign(self.lhs_compiler(stmt.lhs), rhs_sigspec)
 
     def on_Assert(self, stmt):
         self(stmt._check.eq(stmt.test))
@@ -671,7 +691,9 @@ class _StatementCompiler(xfrm.StatementVisitor):
                             decoded_values.append(stmt.test.decoder(int(value, 2)))
                     case_attrs["nmigen.decoding"] = "|".join(decoded_values)
                 with self.case(switch, values, attrs=case_attrs):
+                    self._wrap_assign = False
                     self.on_statements(stmts)
+        self._wrap_assign = True
 
     def on_statement(self, stmt):
         try:
@@ -684,9 +706,11 @@ class _StatementCompiler(xfrm.StatementVisitor):
                 tests[-1] = "-" * bits
                 for branch, test in zip(legalize.branches, tests):
                     with self.case(switch, (test,)):
+                        self._wrap_assign = False
                         branch_value = ast.Const(branch, (bits, sign))
                         with self.state.expand_to(legalize.value, branch_value):
                             super().on_statement(stmt)
+            self._wrap_assign = True
 
     def on_statements(self, stmts):
         for stmt in stmts:
@@ -823,6 +847,7 @@ def convert_fragment(builder, fragment, hierarchy):
                     # Convert statements into decision trees.
                     stmt_compiler._case = case
                     stmt_compiler._has_rhs = False
+                    stmt_compiler._wrap_assign = False
                     stmt_compiler(group_stmts)
 
                     # Verilog `always @*` blocks will not run if `*` does not match anything, i.e.

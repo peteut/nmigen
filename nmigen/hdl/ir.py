@@ -52,10 +52,12 @@ class DriverConflict(UserWarning):
 class Fragment:
     @staticmethod
     def get(obj, platform):
+        code = None
         while True:
             if isinstance(obj, Fragment):
                 return obj
             elif isinstance(obj, Elaboratable):
+                code = obj.elaborate.__code__
                 obj._Elaboratable__used = True
                 obj = obj.elaborate(platform)
             elif hasattr(obj, "elaborate"):
@@ -65,9 +67,16 @@ class Fragment:
                             .format(type(obj)),
                     category=RuntimeWarning,
                     stacklevel=2)
+                code = obj.elaborate.__code__
                 obj = obj.elaborate(platform)
             else:
                 raise AttributeError("Object '{!r}' cannot be elaborated".format(obj))
+            if obj is None and code is not None:
+                warnings.warn_explicit(
+                    message=".elaborate() returned None; missing return statement?",
+                    category=UserWarning,
+                    filename=code.co_filename,
+                    lineno=code.co_firstlineno)
 
     def __init__(self):
         self.ports = SignalDict()
@@ -342,14 +351,38 @@ class Fragment:
 
             subfrag._propagate_domains_down()
 
-    def _propagate_domains(self, ensure_sync_exists):
+    def _create_missing_domains(self, missing_domain):
+        from .xfrm import DomainCollector
+
+        new_domains = []
+        for domain_name in DomainCollector()(self):
+            if domain_name is None:
+                continue
+            if domain_name not in self.domains:
+                value = missing_domain(domain_name)
+                if value is None:
+                    raise DomainError("Domain '{}' is used but not defined".format(domain_name))
+                if type(value) is ClockDomain:
+                    self.add_domains(value)
+                    # And expose ports on the newly added clock domain, since it is added directly
+                    # and there was no chance to add any logic driving it.
+                    new_domains.append(value)
+                else:
+                    new_fragment = Fragment.get(value, platform=None)
+                    if domain_name not in new_fragment.domains:
+                        defined = new_fragment.domains.keys()
+                        raise DomainError(
+                            "Fragment returned by missing domain callback does not define "
+                            "requested domain '{}' (defines {})."
+                            .format(domain_name, ", ".join("'{}'".format(n) for n in defined)))
+                    new_fragment.flatten = True
+                    self.add_subfragment(new_fragment)
+                    self.add_domains(new_fragment.domains.values())
+        return new_domains
+
+    def _propagate_domains(self, missing_domain):
         self._propagate_domains_up()
-        if ensure_sync_exists and not self.domains:
-            cd_sync = ClockDomain()
-            self.add_domains(cd_sync)
-            new_domains = (cd_sync,)
-        else:
-            new_domains = ()
+        new_domains = self._create_missing_domains(missing_domain)
         self._propagate_domains_down()
         return new_domains
 
@@ -504,11 +537,11 @@ class Fragment:
             else:
                 self.add_ports(sig, dir="i")
 
-    def prepare(self, ports=None, ensure_sync_exists=True):
+    def prepare(self, ports=None, missing_domain=lambda name: ClockDomain(name)):
         from .xfrm import SampleLowerer
 
         fragment = SampleLowerer()(self)
-        new_domains = fragment._propagate_domains(ensure_sync_exists)
+        new_domains = fragment._propagate_domains(missing_domain)
         fragment._resolve_hierarchy_conflicts()
         fragment = fragment._insert_domain_resets()
         fragment = fragment._lower_domain_signals()

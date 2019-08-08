@@ -1,18 +1,15 @@
 from abc import abstractproperty
 
-from ..hdl.ast import *
-from ..hdl.dsl import *
-from ..hdl.ir import *
+from ..hdl import *
 from ..build import *
 
 
 __all__ = ["XilinxSpartan3APlatform", "XilinxSpartan6Platform"]
 
+
 # The interface to Spartan 3 and 6 are substantially the same. Handle
 # differences internally using one class and expose user-aliases for
 # convenience.
-
-
 class XilinxSpartan3Or6Platform(TemplatedPlatform):
     """
     Required tools:
@@ -33,7 +30,8 @@ class XilinxSpartan3Or6Platform(TemplatedPlatform):
         * ``ngdbuild_opts``: adds extra options for NGDBuild.
         * ``map_opts``: adds extra options for MAP.
         * ``par_opts``: adds extra options for PAR.
-        * ``bitgen_opts``: adds extra options for BitGen.
+        * ``bitgen_opts``: adds extra and overrides default options for BitGen;
+          default options: ``-g Compress``.
 
     Build products:
         * ``{{name}}.srp``: synthesis report.
@@ -58,6 +56,23 @@ class XilinxSpartan3Or6Platform(TemplatedPlatform):
     device  = abstractproperty()
     package = abstractproperty()
     speed   = abstractproperty()
+
+    @property
+    def family(self):
+        device = self.device.upper()
+        if device.startswith("XC3S"):
+            if device.endswith("A"):
+                return "3A"
+            elif device.endswith("E"):
+                raise NotImplementedError("""Spartan 3E family is not supported
+                                           as a nMigen platform.""")
+            else:
+                raise NotImplementedError("""Spartan 3 family is not supported
+                                           as a nMigen platform.""")
+        elif device.startswith("XC6S"):
+            return "6"
+        else:
+            assert False
 
     file_templates = {
         **TemplatedPlatform.build_script_templates,
@@ -84,7 +99,6 @@ class XilinxSpartan3Or6Platform(TemplatedPlatform):
             {% if platform.family in ["3", "3E", "3A"] %}
             -use_new_parser yes
             {% endif %}
-            -register_balancing yes
             -p {{platform.device}}{{platform.package}}-{{platform.speed}}
             {{get_override("script_after_run")|default("# (script_after_run placeholder)")}}
         """,
@@ -104,6 +118,7 @@ class XilinxSpartan3Or6Platform(TemplatedPlatform):
             {{get_override("add_constraints")|default("# (add_constraints placeholder)")}}
         """
     }
+    unix_interpreter  = "bash"
     command_templates = [
         r"""
         {{get_tool("xst")}}
@@ -121,43 +136,56 @@ class XilinxSpartan3Or6Platform(TemplatedPlatform):
         r"""
         {{get_tool("map")}}
             {{verbose("-detail")}}
-            {{get_override("map_opts")|default(["-w"])|options}}
+            {{get_override("map_opts")|default([])|options}}
+            -w
             -o {{name}}_map.ncd
             {{name}}.ngd
             {{name}}.pcf
         """,
         r"""
         {{get_tool("par")}}
-            {{get_override("par_opts")|default(["-w"])|options}}
+            {{get_override("par_opts")|default([])|options}}
+            -w
             {{name}}_map.ncd
             {{name}}_par.ncd
             {{name}}.pcf
         """,
         r"""
         {{get_tool("bitgen")}}
-            {{get_override("bitgen_opts")|default(["-w"])|options}}
+            {{get_override("bitgen_opts")|default(["-g Compress"])|options}}
+            -w
             -g Binary:Yes
             {{name}}_par.ncd
             {{name}}.bit
         """
     ]
 
-    @property
-    def family(self):
-        device = self.device.upper()
-        if device.startswith("XC3S"):
-            if device.endswith("A"):
-                return "3A"
-            elif device.endswith("E"):
-                raise NotImplementedError("""Spartan 3E family is not supported
-                                           as a nMigen platform.""")
+    def create_missing_domain(self, name):
+        # Xilinx devices have a global write enable (GWE) signal that asserted during configuraiton
+        # and deasserted once it ends. Because it is an asynchronous signal (GWE is driven by logic
+        # syncronous to configuration clock, which is not used by most designs), even though it is
+        # a low-skew global network, its deassertion may violate a setup/hold constraint with
+        # relation to a user clock. The recommended solution is to use a BUFGCE driven by the EOS
+        # signal (if available). For details, see:
+        #   * https://www.xilinx.com/support/answers/44174.html
+        #   * https://www.xilinx.com/support/documentation/white_papers/wp272.pdf
+        if name == "sync" and self.default_clk is not None:
+            clk_i = self.request(self.default_clk).i
+            if self.default_rst is not None:
+                rst_i = self.request(self.default_rst).i
+
+            m = Module()
+            ready = Signal()
+            if self.family == "6":
+                m.submodules += Instance("STARTUP_SPARTAN6", o_EOS=ready)
             else:
-                raise NotImplementedError("""Spartan 3 family is not supported
-                                           as a nMigen platform.""")
-        elif device.startswith("XC6S"):
-            return "6"
-        else:
-            assert False
+                raise NotImplementedError("Spartan 3 devices lack an end-of-startup signal; "
+                                          "ensure the design has an appropriate reset")
+            m.domains += ClockDomain("sync", reset_less=self.default_rst is None)
+            m.submodules += Instance("BUFGCE", i_CE=ready, i_I=clk_i, o_O=ClockSignal("sync"))
+            if self.default_rst is not None:
+                m.d.comb += ResetSignal("sync").eq(rst_i)
+            return m
 
     def _get_xdr_buffer(self, m, pin, i_invert=None, o_invert=None):
         def get_dff(clk, d, q):

@@ -146,15 +146,21 @@ class Value(metaclass=ABCMeta):
         """
         return ~premise | conclusion
 
+    # TODO(nmigen-0.2): move this to nmigen.compat and make it a deprecated extension
+    @deprecated("instead of `.part`, use `.bit_select`")
     def part(self, offset, width):
-        """Indexed part-select.
+        return Part(self, offset, width, src_loc_at=1)
 
-        Selects a constant width but variable offset part of a ``Value``.
+    def bit_select(self, offset, width):
+        """Part-select with bit granularity.
+
+        Selects a constant width but variable offset part of a ``Value``, such that successive
+        parts overlap by all but 1 bit.
 
         Parameters
         ----------
         offset : Value, in
-            start point of the selected bits
+            index of first selected bit
         width : int
             number of selected bits
 
@@ -163,7 +169,27 @@ class Value(metaclass=ABCMeta):
         Part, out
             Selected part of the ``Value``
         """
-        return Part(self, offset, width)
+        return Part(self, offset, width, stride=1, src_loc_at=1)
+
+    def word_select(self, offset, width):
+        """Part-select with word granularity.
+
+        Selects a constant width but variable offset part of a ``Value``, such that successive
+        parts do not overlap.
+
+        Parameters
+        ----------
+        offset : Value, in
+            index of first selected word
+        width : int
+            number of selected bits
+
+        Returns
+        -------
+        Part, out
+            Selected part of the ``Value``
+        """
+        return Part(self, offset, width, stride=width, src_loc_at=1)
 
     def eq(self, value):
         """Assignment.
@@ -434,14 +460,17 @@ class Slice(Value):
 
 @final
 class Part(Value):
-    def __init__(self, value, offset, width, *, src_loc_at=0):
+    def __init__(self, value, offset, width, stride=1, *, src_loc_at=0):
         if not isinstance(width, int) or width < 0:
             raise TypeError("Part width must be a non-negative integer, not '{!r}'".format(width))
+        if not isinstance(stride, int) or stride <= 0:
+            raise TypeError("Part stride must be a positive integer, not '{!r}'".format(stride))
 
         super().__init__(src_loc_at=src_loc_at)
         self.value  = value
         self.offset = Value.wrap(offset)
         self.width  = width
+        self.stride = stride
 
     def shape(self):
         return self.width, False
@@ -453,7 +482,8 @@ class Part(Value):
         return self.value._rhs_signals() | self.offset._rhs_signals()
 
     def __repr__(self):
-        return "(part {} {} {})".format(repr(self.value), repr(self.offset), self.width)
+        return "(part {} {} {} {})".format(repr(self.value), repr(self.offset),
+                                           self.width, self.stride)
 
 
 @final
@@ -1226,31 +1256,32 @@ class _MappedKeySet(MutableSet, _MappedKeyCollection):
 class ValueKey:
     def __init__(self, value):
         self.value = Value.wrap(value)
-
-    def __hash__(self):
         if isinstance(self.value, Const):
-            return hash(self.value.value)
+            self._hash = hash(self.value.value)
         elif isinstance(self.value, (Signal, AnyValue)):
-            return hash(self.value.duid)
+            self._hash = hash(self.value.duid)
         elif isinstance(self.value, (ClockSignal, ResetSignal)):
-            return hash(self.value.domain)
+            self._hash = hash(self.value.domain)
         elif isinstance(self.value, Operator):
-            return hash((self.value.op, tuple(ValueKey(o) for o in self.value.operands)))
+            self._hash = hash((self.value.op, tuple(ValueKey(o) for o in self.value.operands)))
         elif isinstance(self.value, Slice):
-            return hash((ValueKey(self.value.value), self.value.start, self.value.end))
+            self._hash = hash((ValueKey(self.value.value), self.value.start, self.value.end))
         elif isinstance(self.value, Part):
-            return hash((ValueKey(self.value.value), ValueKey(self.value.offset),
-                         self.value.width))
+            self._hash = hash((ValueKey(self.value.value), ValueKey(self.value.offset),
+                              self.value.width, self.value.stride))
         elif isinstance(self.value, Cat):
-            return hash(tuple(ValueKey(o) for o in self.value.parts))
+            self._hash = hash(tuple(ValueKey(o) for o in self.value.parts))
         elif isinstance(self.value, ArrayProxy):
-            return hash((ValueKey(self.value.index),
-                         tuple(ValueKey(e) for e in self.value._iter_as_values())))
+            self._hash = hash((ValueKey(self.value.index),
+                              tuple(ValueKey(e) for e in self.value._iter_as_values())))
         elif isinstance(self.value, Sample):
-            return hash((ValueKey(self.value.value), self.value.clocks, self.value.domain))
+            self._hash = hash((ValueKey(self.value.value), self.value.clocks, self.value.domain))
         else: # :nocov:
             raise TypeError("Object '{!r}' cannot be used as a key in value collections"
                             .format(self.value))
+
+    def __hash__(self):
+        return self._hash
 
     def __eq__(self, other):
         if type(other) is not ValueKey:
@@ -1276,7 +1307,8 @@ class ValueKey:
         elif isinstance(self.value, Part):
             return (ValueKey(self.value.value) == ValueKey(other.value.value) and
                     ValueKey(self.value.offset) == ValueKey(other.value.offset) and
-                    self.value.width == other.value.width)
+                    self.value.width == other.value.width and
+                    self.value.stride == other.value.stride)
         elif isinstance(self.value, Cat):
             return all(ValueKey(a) == ValueKey(b)
                         for a, b in zip(self.value.parts, other.value.parts))
@@ -1327,6 +1359,7 @@ class ValueSet(_MappedKeySet):
 
 class SignalKey:
     def __init__(self, signal):
+        self.signal = signal
         if type(signal) is Signal:
             self._intern = (0, signal.duid)
         elif type(signal) is ClockSignal:
@@ -1335,7 +1368,6 @@ class SignalKey:
             self._intern = (2, signal.domain)
         else:
             raise TypeError("Object '{!r}' is not an nMigen signal".format(signal))
-        self.signal = signal
 
     def __hash__(self):
         return hash(self._intern)
