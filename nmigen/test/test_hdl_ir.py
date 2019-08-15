@@ -7,11 +7,22 @@ from ..hdl.mem import *
 from .tools import *
 
 
+class BadElaboratable(Elaboratable):
+    def elaborate(self, platform):
+        return
+
+
 class FragmentGetTestCase(FHDLTestCase):
     def test_get_wrong(self):
         with self.assertRaises(AttributeError,
                 msg="Object 'None' cannot be elaborated"):
             Fragment.get(None, platform=None)
+
+        with self.assertWarns(UserWarning,
+                msg=".elaborate() returned None; missing return statement?"):
+            with self.assertRaises(AttributeError,
+                    msg="Object 'None' cannot be elaborated"):
+                Fragment.get(BadElaboratable(), platform=None)
 
 
 class FragmentGeneratedTestCase(FHDLTestCase):
@@ -365,19 +376,82 @@ class FragmentDomainsTestCase(FHDLTestCase):
         f1.add_domains(cd)
         f1.add_subfragment(f2)
 
-        f1._propagate_domains(ensure_sync_exists=False)
+        new_domains = f1._propagate_domains(missing_domain=lambda name: None)
         self.assertEqual(f1.domains, {"cd": cd})
         self.assertEqual(f2.domains, {"cd": cd})
+        self.assertEqual(new_domains, [])
 
-    def test_propagate_ensure_sync(self):
+    def test_propagate_missing(self):
+        s1 = Signal()
         f1 = Fragment()
+        f1.add_driver(s1, "sync")
+
+        with self.assertRaises(DomainError,
+                msg="Domain 'sync' is used but not defined"):
+            f1._propagate_domains(missing_domain=lambda name: None)
+
+    def test_propagate_create_missing(self):
+        s1 = Signal()
+        f1 = Fragment()
+        f1.add_driver(s1, "sync")
         f2 = Fragment()
         f1.add_subfragment(f2)
 
-        f1._propagate_domains(ensure_sync_exists=True)
+        new_domains = f1._propagate_domains(missing_domain=lambda name: ClockDomain(name))
         self.assertEqual(f1.domains.keys(), {"sync"})
         self.assertEqual(f2.domains.keys(), {"sync"})
         self.assertEqual(f1.domains["sync"], f2.domains["sync"])
+        self.assertEqual(new_domains, [f1.domains["sync"]])
+
+    def test_propagate_create_missing_fragment(self):
+        s1 = Signal()
+        f1 = Fragment()
+        f1.add_driver(s1, "sync")
+
+        cd = ClockDomain("sync")
+        f2 = Fragment()
+        f2.add_domains(cd)
+
+        new_domains = f1._propagate_domains(missing_domain=lambda name: f2)
+        self.assertEqual(f1.domains.keys(), {"sync"})
+        self.assertEqual(f1.domains["sync"], f2.domains["sync"])
+        self.assertEqual(new_domains, [])
+        self.assertEqual(f1.subfragments, [
+            (f2, None)
+        ])
+        self.assertTrue(f2.flatten)
+
+    def test_propagate_create_missing_fragment_many_domains(self):
+        s1 = Signal()
+        f1 = Fragment()
+        f1.add_driver(s1, "sync")
+
+        cd_por  = ClockDomain("por")
+        cd_sync = ClockDomain("sync")
+        f2 = Fragment()
+        f2.add_domains(cd_por, cd_sync)
+
+        new_domains = f1._propagate_domains(missing_domain=lambda name: f2)
+        self.assertEqual(f1.domains.keys(), {"sync", "por"})
+        self.assertEqual(f2.domains.keys(), {"sync", "por"})
+        self.assertEqual(f1.domains["sync"], f2.domains["sync"])
+        self.assertEqual(new_domains, [])
+        self.assertEqual(f1.subfragments, [
+            (f2, None)
+        ])
+
+    def test_propagate_create_missing_fragment_wrong(self):
+        s1 = Signal()
+        f1 = Fragment()
+        f1.add_driver(s1, "sync")
+
+        f2 = Fragment()
+        f2.add_domains(ClockDomain("foo"))
+
+        with self.assertRaises(DomainError,
+                msg="Fragment returned by missing domain callback does not define requested "
+                    "domain 'sync' (defines 'foo')."):
+            f1._propagate_domains(missing_domain=lambda name: f2)
 
 
 class FragmentHierarchyConflictTestCase(FHDLTestCase):
@@ -650,7 +724,7 @@ class InstanceTestCase(FHDLTestCase):
         f = Fragment()
         f.add_subfragment(Instance("foo", o_O=s[0]))
         f.add_subfragment(Instance("foo", o_O=s[1]))
-        fp = f.prepare(ports=[s], ensure_sync_exists=False)
+        fp = f.prepare(ports=[s], missing_domain=lambda name: None)
         self.assertEqual(fp.ports, SignalDict([
             (s, "o"),
         ]))
