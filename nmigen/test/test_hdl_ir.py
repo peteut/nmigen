@@ -290,6 +290,17 @@ class FragmentDomainsTestCase(FHDLTestCase):
         f1._propagate_domains_up()
         self.assertEqual(f1.domains, {"cd": cd})
 
+    def test_propagate_up_local(self):
+        cd = ClockDomain(local=True)
+
+        f1 = Fragment()
+        f2 = Fragment()
+        f1.add_subfragment(f2)
+        f2.add_domains(cd)
+
+        f1._propagate_domains_up()
+        self.assertEqual(f1.domains, {})
+
     def test_domain_conflict(self):
         cda = ClockDomain("sync")
         cdb = ClockDomain("sync")
@@ -417,9 +428,8 @@ class FragmentDomainsTestCase(FHDLTestCase):
         self.assertEqual(f1.domains["sync"], f2.domains["sync"])
         self.assertEqual(new_domains, [])
         self.assertEqual(f1.subfragments, [
-            (f2, None)
+            (f2, "cd_sync")
         ])
-        self.assertTrue(f2.flatten)
 
     def test_propagate_create_missing_fragment_many_domains(self):
         s1 = Signal()
@@ -437,7 +447,7 @@ class FragmentDomainsTestCase(FHDLTestCase):
         self.assertEqual(f1.domains["sync"], f2.domains["sync"])
         self.assertEqual(new_domains, [])
         self.assertEqual(f1.subfragments, [
-            (f2, None)
+            (f2, "cd_sync")
         ])
 
     def test_propagate_create_missing_fragment_wrong(self):

@@ -25,6 +25,9 @@ class ClockDomain:
         If ``True``, the domain uses an asynchronous reset, and registers within this domain
         are initialized to their reset state when reset level changes. Otherwise, registers
         are initialized to reset state at the next clock cycle when reset is asserted.
+    local : bool
+        If ``True``, the domain will propagate only downwards in the design hierarchy. Otherwise,
+        the domain will propagate everywhere.
 
     Attributes
     ----------
@@ -42,7 +45,8 @@ class ClockDomain:
         else:
             return "{}_{}".format(domain_name, signal_name)
 
-    def __init__(self, name=None, reset_less=False, async_reset=False):
+    def __init__(self, name=None, *, clk_edge="pos", reset_less=False, async_reset=False,
+                 local=False):
         if name is None:
             try:
                 name = tracer.get_var_name()
@@ -52,15 +56,24 @@ class ClockDomain:
             name = name[3:]
         if name == "comb":
             raise ValueError("Domain '{}' may not be clocked".format(name))
+
+        if clk_edge not in ("pos", "neg"):
+            raise ValueError("Domain clock edge must be one of 'pos' or 'neg', not {!r}"
+                             .format(clk_edge))
+
         self.name = name
 
         self.clk = Signal(name=self._name_for(name, "clk"), src_loc_at=1)
+        self.clk_edge = clk_edge
+
         if reset_less:
             self.rst = None
         else:
             self.rst = Signal(name=self._name_for(name, "rst"), src_loc_at=1)
 
         self.async_reset = async_reset
+
+        self.local = local
 
     def rename(self, new_name):
         self.name = new_name

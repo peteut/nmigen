@@ -1,6 +1,7 @@
 from abc import ABCMeta, abstractmethod
 import builtins
 import traceback
+import warnings
 from collections import OrderedDict
 from collections.abc import Iterable, MutableMapping, MutableSet, MutableSequence
 from enum import Enum
@@ -15,7 +16,7 @@ __all__ = [
     "Signal", "ClockSignal", "ResetSignal",
     "UserValue",
     "Sample", "Past", "Stable", "Rose", "Fell", "Initial",
-    "Statement", "Assign", "Assert", "Assume", "Switch", "Delay", "Tick",
+    "Statement", "Assign", "Assert", "Assume", "Cover", "Switch", "Delay", "Tick",
     "Passive", "ValueKey", "ValueDict", "ValueSet", "SignalKey", "SignalDict",
     "SignalSet",
 ]
@@ -132,9 +133,39 @@ class Value(metaclass=ABCMeta):
         Returns
         -------
         Value, out
-            Output ``Value``. If any bits are set, returns ``1``, else ``0``.
+            ``1`` if any bits are set, ``0`` otherwise.
         """
         return Operator("b", [self])
+
+    def any(self):
+        """Check if any bits are ``1``.
+
+        Returns
+        -------
+        Value, out
+            ``1`` if any bits are set, ``0`` otherwise.
+        """
+        return Operator("r|", [self])
+
+    def all(self):
+        """Check if all bits are ``1``.
+
+        Returns
+        -------
+        Value, out
+            ``1`` if all bits are set, ``0`` otherwise.
+        """
+        return Operator("r&", [self])
+
+    def xor(self):
+        """Compute pairwise exclusive-or of every bit.
+
+        Returns
+        -------
+        Value, out
+            ``1`` if an odd number of bits are set, ``0`` if an even number of bits are set.
+        """
+        return Operator("r^", [self])
 
     def implies(premise, conclusion):
         """Implication.
@@ -160,9 +191,9 @@ class Value(metaclass=ABCMeta):
         Parameters
         ----------
         offset : Value, in
-            index of first selected bit
+            Index of first selected bit.
         width : int
-            number of selected bits
+            Number of selected bits.
 
         Returns
         -------
@@ -180,9 +211,9 @@ class Value(metaclass=ABCMeta):
         Parameters
         ----------
         offset : Value, in
-            index of first selected word
+            Index of first selected word.
         width : int
-            number of selected bits
+            Number of selected bits.
 
         Returns
         -------
@@ -190,6 +221,56 @@ class Value(metaclass=ABCMeta):
             Selected part of the ``Value``
         """
         return Part(self, offset, width, stride=width, src_loc_at=1)
+
+    def matches(self, *patterns):
+        """Pattern matching.
+
+        Matches against a set of patterns, which may be integers or bit strings, recognizing
+        the same grammar as ``Case()``.
+
+        Parameters
+        ----------
+        patterns : int or str
+            Patterns to match against.
+
+        Returns
+        -------
+        Value, out
+            ``1`` if any pattern matches the value, ``0`` otherwise.
+        """
+        matches = []
+        for pattern in patterns:
+            if isinstance(pattern, str) and any(bit not in "01-" for bit in pattern):
+                raise SyntaxError("Match pattern '{}' must consist of 0, 1, and - (don't care) "
+                                  "bits"
+                                  .format(pattern))
+            if isinstance(pattern, str) and len(pattern) != len(self):
+                raise SyntaxError("Match pattern '{}' must have the same width as match value "
+                                  "(which is {})"
+                                  .format(pattern, len(self)))
+            if not isinstance(pattern, (int, str)):
+                raise SyntaxError("Match pattern must be an integer or a string, not {}"
+                                  .format(pattern))
+            if isinstance(pattern, int) and bits_for(pattern) > len(self):
+                warnings.warn("Match pattern '{:b}' is wider than match value "
+                              "(which has width {}); comparison will never be true"
+                              .format(pattern, len(self)),
+                              SyntaxWarning, stacklevel=3)
+                continue
+            if isinstance(pattern, int):
+                matches.append(self == pattern)
+            elif isinstance(pattern, str):
+                mask    = int(pattern.replace("0", "1").replace("-", "0"), 2)
+                pattern = int(pattern.replace("-", "0"), 2)
+                matches.append((self & mask) == pattern)
+            else:
+                assert False
+        if not matches:
+            return Const(0)
+        elif len(matches) == 1:
+            return matches[0]
+        else:
+            return Cat(*matches).any()
 
     def eq(self, value):
         """Assignment.
@@ -360,7 +441,7 @@ class Operator(Value):
                     return a_bits + 1, True
                 else:
                     return a_bits, a_sign
-            if self.op == "b":
+            if self.op in ("b", "r|", "r&", "r^"):
                 return 1, False
         elif len(op_shapes) == 2:
             (a_bits, a_sign), (b_bits, b_sign) = op_shapes
@@ -371,7 +452,7 @@ class Operator(Value):
                 return a_bits + b_bits, a_sign or b_sign
             if self.op == "%":
                 return a_bits, a_sign
-            if self.op in ("<", "<=", "==", "!=", ">", ">=", "b"):
+            if self.op in ("<", "<=", "==", "!=", ">", ">="):
                 return 1, False
             if self.op in ("&", "^", "|"):
                 return self._bitwise_binary_shape(*op_shapes)
@@ -627,6 +708,13 @@ class Signal(Value, DUID):
                  attrs=None, decoder=None, src_loc_at=0):
         super().__init__(src_loc_at=src_loc_at)
 
+        # TODO(nmigen-0.2): move this to nmigen.compat and make it a deprecated extension
+        if min is not None or max is not None:
+            warnings.warn("instead of `Signal(min={min}, max={max})`, "
+                          "use `Signal.range({min}, {max})`"
+                          .format(min=min or 0, max=max or 2),
+                          DeprecationWarning, stacklevel=2 + src_loc_at)
+
         if name is not None and not isinstance(name, str):
             raise TypeError("Name must be a string, not '{!r}'".format(name))
         self.name = name or tracer.get_var_name(depth=2 + src_loc_at, default="$signal")
@@ -657,6 +745,14 @@ class Signal(Value, DUID):
 
         if not isinstance(self.nbits, int) or self.nbits < 0:
             raise TypeError("Width must be a non-negative integer, not '{!r}'".format(self.nbits))
+
+        reset_nbits = bits_for(reset, self.signed)
+        if reset != 0 and reset_nbits > self.nbits:
+            warnings.warn("Reset value {!r} requires {} bits to represent, but the signal "
+                          "only has {} bits"
+                          .format(reset, reset_nbits, self.nbits),
+                          SyntaxWarning, stacklevel=2 + src_loc_at)
+
         self.reset = int(reset)
         self.reset_less = bool(reset_less)
 
@@ -670,6 +766,23 @@ class Signal(Value, DUID):
             self.decoder = enum_decoder
         else:
             self.decoder = decoder
+
+    @classmethod
+    def range(cls, *args, src_loc_at=0, **kwargs):
+        """Create Signal that can represent a given range.
+
+        The parameters to ``Signal.range`` are the same as for the built-in ``range`` function.
+        That is, for any given ``range(*args)``, ``Signal.range(*args)`` can represent any
+        ``x for x in range(*args)``.
+        """
+        value_range = range(*args)
+        if len(value_range) > 0:
+            signed = value_range.start < 0 or (value_range.stop - value_range.step) < 0
+        else:
+            signed = value_range.start < 0
+        nbits  = max(bits_for(value_range.start, signed),
+                     bits_for(value_range.stop - value_range.step, signed))
+        return cls((nbits, signed), src_loc_at=1 + src_loc_at, **kwargs)
 
     @classmethod
     def like(cls, other, *, name=None, name_suffix=None, src_loc_at=0, **kwargs):
@@ -958,11 +1071,14 @@ class Sample(Value):
         self.clocks = int(clocks)
         self.domain = domain
         if not isinstance(self.value, (Const, Signal, ClockSignal, ResetSignal, Initial)):
-            raise TypeError("Sampled value may only be a signal or a constant, not {!r}"
+            raise TypeError("Sampled value must be a signal or a constant, not {!r}"
                             .format(self.value))
         if self.clocks < 0:
             raise ValueError("Cannot sample a value {} cycles in the future"
                              .format(-self.clocks))
+        if not (self.domain is None or isinstance(self.domain, str)):
+            raise TypeError("Domain name must be a string or None, not {!r}"
+                            .format(self.domain))
 
     def shape(self):
         return self.value.shape()
@@ -993,7 +1109,7 @@ def Fell(expr, clocks=0, domain=None):
 
 @final
 class Initial(Value):
-    """Start indicator, for formal verification.
+    """Start indicator, for model checking.
 
     An ``Initial`` signal is ``1`` at the first cycle of model checking, and ``0`` at any other.
     """
@@ -1078,6 +1194,11 @@ class Assert(Property):
 @final
 class Assume(Property):
     _kind = "assume"
+
+
+@final
+class Cover(Property):
+    _kind = "cover"
 
 
 # @final

@@ -10,9 +10,6 @@ from ..tools import flatten
 from ..hdl.ast import *
 from ..hdl.ir import *
 from ..hdl.xfrm import ValueVisitor, StatementVisitor
-from ..hdl.ast import DUID
-from ..hdl.dsl import Module
-from ..hdl.cd import ClockDomain
 
 
 __all__ = ["Simulator", "Delay", "Tick", "Passive", "DeadlineError"]
@@ -132,6 +129,15 @@ class _RHSValueCompiler(_ValueCompiler):
                 return lambda state: normalize(-arg(state), shape)
             if value.op == "b":
                 return lambda state: normalize(bool(arg(state)), shape)
+            if value.op == "r|":
+                return lambda state: normalize(arg(state) != 0, shape)
+            if value.op == "r&":
+                val, = value.operands
+                mask = (1 << len(val)) - 1
+                return lambda state: normalize(arg(state) == mask, shape)
+            if value.op == "r^":
+                # Believe it or not, this is the fastest way to compute a sideways XOR in Python.
+                return lambda state: normalize(str(arg(state)).count("1") % 2, shape)
         elif len(value.operands) == 2:
             lhs, rhs = map(self, value.operands)
             if value.op == "+":
@@ -323,6 +329,9 @@ class _StatementCompiler(StatementVisitor):
     def on_Assume(self, stmt):
         pass # :nocov:
 
+    def on_Cover(self, stmt):
+        raise NotImplementedError("Covers not yet implemented for Simulator backend.") # :nocov:
+
     def on_Switch(self, stmt):
         test  = self.rrhs_compiler(stmt.test)
         cases = []
@@ -359,36 +368,22 @@ class _StatementCompiler(StatementVisitor):
         return run
 
 
-class _SimulatorPlatform:
-    def get_reset_sync(self, reset_sync):
-        m = Module()
-        cd = ClockDomain("_reset_sync_{}".format(DUID().duid), async_reset=True)
-        m.domains += cd
-        for i, o in zip((0, *reset_sync._regs), reset_sync._regs):
-            m.d[cd.name] += o.eq(i)
-        m.d.comb += [
-            ClockSignal(cd.name).eq(ClockSignal(reset_sync.domain)),
-            ResetSignal(cd.name).eq(reset_sync.arst),
-            ResetSignal(reset_sync.domain).eq(reset_sync._regs[-1])
-        ]
-        return m
-
-
 class Simulator:
     def __init__(self, fragment, vcd_file=None, gtkw_file=None, traces=()):
-        self._fragment        = Fragment.get(fragment, platform=_SimulatorPlatform())
+        self._fragment        = Fragment.get(fragment, platform=None)
 
         self._signal_slots    = SignalDict()  # Signal -> int/slot
         self._slot_signals    = list()        # int/slot -> Signal
 
-        self._domains         = dict()        # str/domain -> ClockDomain
-        self._domain_triggers = list()        # int/slot -> str/domain
+        self._domains         = list()        # [ClockDomain]
+        self._clk_edges       = dict()        # ClockDomain -> int/edge
+        self._domain_triggers = list()        # int/slot -> ClockDomain
 
         self._signals         = SignalSet()   # {Signal}
         self._comb_signals    = bitarray()    # {Signal}
         self._sync_signals    = bitarray()    # {Signal}
         self._user_signals    = bitarray()    # {Signal}
-        self._domain_signals  = dict()        # str/domain -> {Signal}
+        self._domain_signals  = dict()        # ClockDomain -> {Signal}
 
         self._started         = False
         self._timestamp       = 0.
@@ -420,7 +415,7 @@ class Simulator:
     def _check_process(process):
         if inspect.isgeneratorfunction(process):
             process = process()
-        if not inspect.isgenerator(process):
+        if not (inspect.isgenerator(process) or inspect.iscoroutine(process)):
             raise TypeError("Cannot add a process '{!r}' because it is not a generator or "
                             "a generator function"
                             .format(process))
@@ -430,7 +425,10 @@ class Simulator:
         if process in self._process_loc:
             return self._process_loc[process]
         else:
-            frame = process.gi_frame
+            if inspect.isgenerator(process):
+                frame = process.gi_frame
+            if inspect.iscoroutine(process):
+                frame = process.cr_frame
             return "{}:{}".format(inspect.getfile(frame), inspect.getlineno(frame))
 
     def add_process(self, process):
@@ -453,7 +451,7 @@ class Simulator:
         sync_process = sync_process()
         self.add_process(sync_process)
 
-    def add_clock(self, period, phase=None, domain="sync"):
+    def add_clock(self, period, *, phase=None, domain="sync", if_exists=False):
         if self._fastest_clock == self._epsilon or period < self._fastest_clock:
             self._fastest_clock = period
         if domain in self._all_clocks:
@@ -463,7 +461,16 @@ class Simulator:
         half_period = period / 2
         if phase is None:
             phase = half_period
-        clk = self._domains[domain].clk
+        for domain_obj in self._domains:
+            if not domain_obj.local and domain_obj.name == domain:
+                clk = domain_obj.clk
+                break
+        else:
+            if if_exists:
+                return
+            else:
+                raise ValueError("Domain '{}' is not present in simulation"
+                                 .format(domain))
         def clk_process():
             yield Passive()
             yield Delay(phase)
@@ -481,17 +488,20 @@ class Simulator:
                                          comment="Generated by nMigen")
 
         root_fragment = self._fragment.prepare()
-        self._domains = root_fragment.domains
 
         hierarchy = {}
+        domains = set()
         def add_fragment(fragment, scope=()):
             hierarchy[fragment] = scope
+            domains.update(fragment.domains.values())
             for index, (subfragment, name) in enumerate(fragment.subfragments):
                 if name is None:
                     add_fragment(subfragment, (*scope, "U{}".format(index)))
                 else:
                     add_fragment(subfragment, (*scope, name))
         add_fragment(root_fragment, scope=("top",))
+        self._domains = list(domains)
+        self._clk_edges = {domain: 1 if domain.clk_edge == "pos" else 0 for domain in domains}
 
         def add_signal(signal):
             if signal not in self._signals:
@@ -526,10 +536,10 @@ class Simulator:
             for signal in fragment.iter_signals():
                 add_signal(signal)
 
-            for domain, cd in fragment.domains.items():
-                add_domain_signal(cd.clk, domain)
-                if cd.rst is not None:
-                    add_domain_signal(cd.rst, domain)
+            for domain_name, domain in fragment.domains.items():
+                add_domain_signal(domain.clk, domain)
+                if domain.rst is not None:
+                    add_domain_signal(domain.rst, domain)
 
         for fragment, fragment_scope in hierarchy.items():
             for signal in fragment.iter_signals():
@@ -571,31 +581,31 @@ class Simulator:
                     except KeyError:
                         suffix = (suffix or 0) + 1
 
-            for domain, signals in fragment.drivers.items():
+            for domain_name, signals in fragment.drivers.items():
                 signals_bits = bitarray(len(self._signals))
                 signals_bits.setall(False)
                 for signal in signals:
                     signals_bits[self._signal_slots[signal]] = True
 
-                if domain is None:
+                if domain_name is None:
                     self._comb_signals |= signals_bits
                 else:
                     self._sync_signals |= signals_bits
-                    self._domain_signals[domain] |= signals_bits
+                    self._domain_signals[fragment.domains[domain_name]] |= signals_bits
 
             statements = []
-            for domain, signals in fragment.drivers.items():
+            for domain_name, signals in fragment.drivers.items():
                 reset_stmts = []
                 hold_stmts  = []
                 for signal in signals:
                     reset_stmts.append(signal.eq(signal.reset))
                     hold_stmts .append(signal.eq(signal))
 
-                if domain is None:
+                if domain_name is None:
                     statements += reset_stmts
                 else:
-                    if self._domains[domain].async_reset:
-                        statements.append(Switch(self._domains[domain].rst,
+                    if fragment.domains[domain_name].async_reset:
+                        statements.append(Switch(fragment.domains[domain_name].rst,
                             {0: hold_stmts, 1: reset_stmts}))
                     else:
                         statements += hold_stmts
@@ -610,10 +620,10 @@ class Simulator:
 
             for signal in compiler.sensitivity:
                 add_funclet(signal, funclet)
-            for domain, cd in fragment.domains.items():
-                add_funclet(cd.clk, funclet)
-                if cd.rst is not None:
-                    add_funclet(cd.rst, funclet)
+            for domain in fragment.domains.values():
+                add_funclet(domain.clk, funclet)
+                if domain.rst is not None:
+                    add_funclet(domain.rst, funclet)
 
         self._user_signals = bitarray(len(self._signals))
         self._user_signals.setall(True)
@@ -646,7 +656,8 @@ class Simulator:
             return
 
         # If the signal is a clock that triggers synchronous logic, record that fact.
-        if new == 1 and self._domain_triggers[signal_slot] is not None:
+        if (self._domain_triggers[signal_slot] is not None and
+                self._clk_edges[self._domain_triggers[signal_slot]] == new):
             domains.add(self._domain_triggers[signal_slot])
 
         if self._vcd_writer:
@@ -670,7 +681,7 @@ class Simulator:
 
     def _commit_sync_signals(self, domains):
         """Perform the sync part of IR processes (aka RTLIL posedge)."""
-        # At entry, `domains` contains a list of every simultaneously triggered sync update.
+        # At entry, `domains` contains a set of every simultaneously triggered sync update.
         while domains:
             # Advance the timeline a bit (purely for observational purposes) and commit all of them
             # at the same timestamp.
@@ -681,8 +692,8 @@ class Simulator:
                 domain = curr_domains.pop()
 
                 # Wake up any simulator processes that wait for a domain tick.
-                for process, wait_domain in list(self._wait_tick.items()):
-                    if domain == wait_domain:
+                for process, wait_domain_name in list(self._wait_tick.items()):
+                    if domain.name == wait_domain_name:
                         del self._wait_tick[process]
                         self._suspended.remove(process)
 
@@ -860,11 +871,11 @@ class Simulator:
                         suffix = ""
                     gtkw_save.trace(self._vcd_names[signal_slot] + suffix, **kwargs)
 
-            for domain, cd in self._domains.items():
-                with gtkw_save.group("d.{}".format(domain)):
-                    if cd.rst is not None:
-                        add_trace(cd.rst)
-                    add_trace(cd.clk)
+            for domain in self._domains:
+                with gtkw_save.group("d.{}".format(domain.name)):
+                    if domain.rst is not None:
+                        add_trace(domain.rst)
+                    add_trace(domain.clk)
 
             for signal in self._traces:
                 add_trace(signal)

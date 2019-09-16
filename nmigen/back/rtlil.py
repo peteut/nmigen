@@ -7,7 +7,7 @@ from ..tools import bits_for, flatten
 from ..hdl import ast, rec, ir, mem, xfrm
 
 
-__all__ = ["convert"]
+__all__ = ["convert", "convert_fragment"]
 
 
 class _Namer:
@@ -122,6 +122,9 @@ class _ModuleBuilder(_Namer, _BufferedBuilder, _AttrBuilder):
                              param, value.translate(self._escape_map))
             elif isinstance(value, int):
                 self._append("    parameter \\{} {:d}\n",
+                             param, value)
+            elif isinstance(value, float):
+                self._append("    parameter real \\{} \"{!r}\"\n",
                              param, value)
             elif isinstance(value, ast.Const):
                 self._append("    parameter \\{} {}'{:b}\n",
@@ -372,6 +375,9 @@ class _RHSValueCompiler(_ValueCompiler):
         (1, "~"):    "$not",
         (1, "-"):    "$neg",
         (1, "b"):    "$reduce_bool",
+        (1, "r|"):   "$reduce_or",
+        (1, "r&"):   "$reduce_and",
+        (1, "r^"):   "$reduce_xor",
         (2, "+"):    "$add",
         (2, "-"):    "$sub",
         (2, "*"):    "$mul",
@@ -651,27 +657,20 @@ class _StatementCompiler(xfrm.StatementVisitor):
         else:
             self._case.assign(self.lhs_compiler(stmt.lhs), rhs_sigspec)
 
-    def on_Assert(self, stmt):
+    def on_property(self, stmt):
         self(stmt._check.eq(stmt.test))
         self(stmt._en.eq(1))
 
         en_wire = self.rhs_compiler(stmt._en)
         check_wire = self.rhs_compiler(stmt._check)
-        self.state.rtlil.cell("$assert", ports={
+        self.state.rtlil.cell("$" + stmt._kind, ports={
             "\\A": check_wire,
             "\\EN": en_wire,
         }, src=src(stmt.src_loc))
 
-    def on_Assume(self, stmt):
-        self(stmt._check.eq(stmt.test))
-        self(stmt._en.eq(1))
-
-        en_wire = self.rhs_compiler(stmt._en)
-        check_wire = self.rhs_compiler(stmt._check)
-        self.state.rtlil.cell("$assume", ports={
-            "\\A": check_wire,
-            "\\EN": en_wire,
-        }, src=src(stmt.src_loc))
+    on_Assert = on_property
+    on_Assume = on_property
+    on_Cover  = on_property
 
     def on_Switch(self, stmt):
         self._check_rhs(stmt.test)
@@ -720,7 +719,7 @@ class _StatementCompiler(xfrm.StatementVisitor):
             self.on_statement(stmt)
 
 
-def convert_fragment(builder, fragment, hierarchy):
+def _convert_fragment(builder, fragment, name_map, hierarchy):
     if isinstance(fragment, ir.Instance):
         port_map = OrderedDict()
         for port_name, (value, dir) in fragment.named_ports.items():
@@ -807,7 +806,8 @@ def convert_fragment(builder, fragment, hierarchy):
                     sub_params[param_name] = param_value
 
             sub_type, sub_port_map = \
-                convert_fragment(builder, subfragment, hierarchy=hierarchy + (sub_name,))
+                _convert_fragment(builder, subfragment, name_map,
+                                  hierarchy=hierarchy + (sub_name,))
 
             sub_ports = OrderedDict()
             for port, value in sub_port_map.items():
@@ -881,8 +881,8 @@ def convert_fragment(builder, fragment, hierarchy):
 
                 # For every signal in every sync domain, assign \sig to \sig$next. The sensitivity
                 # list, however, differs between domains: for domains with sync reset, it is
-                # `posedge clk`, for sync domains with async reset it is `posedge clk or
-                # posedge rst`.
+                # `[pos|neg]edge clk`, for sync domains with async reset it is `[pos|neg]edge clk
+                # or posedge rst`.
                 for domain, signals in fragment.drivers.items():
                     if domain is None:
                         continue
@@ -894,7 +894,7 @@ def convert_fragment(builder, fragment, hierarchy):
                     cd = fragment.domains[domain]
 
                     triggers = []
-                    triggers.append(("posedge", compiler_state.resolve_curr(cd.clk)))
+                    triggers.append((cd.clk_edge + "edge", compiler_state.resolve_curr(cd.clk)))
                     if cd.async_reset:
                         triggers.append(("posedge", compiler_state.resolve_curr(cd.rst)))
 
@@ -928,18 +928,33 @@ def convert_fragment(builder, fragment, hierarchy):
             wire_curr, _ = compiler_state.wires[wire]
             module.connect(wire_curr, rhs_compiler(ast.Const(wire.reset, wire.nbits)))
 
-    # Finally, collect the names we've given to our ports in RTLIL, and correlate these with
-    # the signals represented by these ports. If we are a submodule, this will be necessary
-    # to create a cell for us in the parent module.
+    # Collect the names we've given to our ports in RTLIL, and correlate these with the signals
+    # represented by these ports. If we are a submodule, this will be necessary to create a cell
+    # for us in the parent module.
     port_map = OrderedDict()
     for signal in fragment.ports:
         port_map[compiler_state.resolve_curr(signal)] = signal
 
+    # Finally, collect tha names we've given to each wire in RTLIL, and provide these to
+    # the caller, to allow manipulating them in the toolchain.
+    for signal in compiler_state.wires:
+        wire_name = compiler_state.resolve_curr(signal)
+        if wire_name.startswith("\\"):
+            wire_name = wire_name[1:]
+        name_map[signal] = hierarchy + (wire_name,)
+
     return module.name, port_map
 
 
-def convert(fragment, name="top", platform=None, **kwargs):
-    fragment = ir.Fragment.get(fragment, platform).prepare(**kwargs)
+def convert_fragment(fragment, name="top"):
+    assert isinstance(fragment, ir.Fragment)
     builder = _Builder()
-    convert_fragment(builder, fragment, hierarchy=(name,))
-    return str(builder)
+    name_map = ast.SignalDict()
+    _convert_fragment(builder, fragment, name_map, hierarchy=(name,))
+    return str(builder), name_map
+
+
+def convert(elaboratable, name="top", platform=None, **kwargs):
+    fragment = ir.Fragment.get(elaboratable, platform).prepare(**kwargs)
+    il_text, name_map = convert_fragment(fragment, name)
+    return il_text

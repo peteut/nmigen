@@ -57,6 +57,24 @@ class SimulatorUnitTestCase(FHDLTestCase):
         self.assertStatement(stmt, [C(1, 4)], C(1))
         self.assertStatement(stmt, [C(2, 4)], C(1))
 
+    def test_any(self):
+        stmt = lambda y, a: y.eq(a.any())
+        self.assertStatement(stmt, [C(0b00, 2)], C(0))
+        self.assertStatement(stmt, [C(0b01, 2)], C(1))
+        self.assertStatement(stmt, [C(0b11, 2)], C(1))
+
+    def test_all(self):
+        stmt = lambda y, a: y.eq(a.all())
+        self.assertStatement(stmt, [C(0b00, 2)], C(0))
+        self.assertStatement(stmt, [C(0b01, 2)], C(0))
+        self.assertStatement(stmt, [C(0b11, 2)], C(1))
+
+    def test_xor(self):
+        stmt = lambda y, a: y.eq(a.xor())
+        self.assertStatement(stmt, [C(0b00, 2)], C(0))
+        self.assertStatement(stmt, [C(0b01, 2)], C(1))
+        self.assertStatement(stmt, [C(0b11, 2)], C(0))
+
     def test_add(self):
         stmt = lambda y, a, b: y.eq(a + b)
         self.assertStatement(stmt, [C(0,  4), C(1,  4)], C(1,   4))
@@ -250,7 +268,7 @@ class SimulatorUnitTestCase(FHDLTestCase):
 class SimulatorIntegrationTestCase(FHDLTestCase):
     @contextmanager
     def assertSimulation(self, module, deadline=None):
-        with Simulator(module.elaborate(platform=None)) as sim:
+        with Simulator(module) as sim:
             yield sim
             if deadline is None:
                 sim.run()
@@ -403,7 +421,7 @@ class SimulatorIntegrationTestCase(FHDLTestCase):
                         "a generator function"):
                 sim.add_process(1)
 
-    def test_add_clock_wrong(self):
+    def test_add_clock_wrong_twice(self):
         m = Module()
         s = Signal()
         m.d.sync += s.eq(0)
@@ -412,6 +430,18 @@ class SimulatorIntegrationTestCase(FHDLTestCase):
             with self.assertRaises(ValueError,
                     msg="Domain 'sync' already has a clock driving it"):
                 sim.add_clock(1)
+
+    def test_add_clock_wrong_missing(self):
+        m = Module()
+        with self.assertSimulation(m) as sim:
+            with self.assertRaises(ValueError,
+                    msg="Domain 'sync' is not present in simulation"):
+                sim.add_clock(1)
+
+    def test_add_clock_if_exists(self):
+        m = Module()
+        with self.assertSimulation(m) as sim:
+            sim.add_clock(1, if_exists=True)
 
     def test_eq_signal_unused_wrong(self):
         self.setUp_lhs_rhs()
