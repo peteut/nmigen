@@ -4,11 +4,19 @@ from ..back.pysim import *
 from ..lib.cdc import *
 
 
-class MultiRegTestCase(FHDLTestCase):
+class FFSynchronizerTestCase(FHDLTestCase):
+    def test_stages_wrong(self):
+        with self.assertRaises(TypeError,
+                msg="Synchronization stage count must be a positive integer, not '0'"):
+            FFSynchronizer(Signal(), Signal(), stages=0)
+        with self.assertRaises(ValueError,
+                msg="Synchronization stage count may not safely be less than 2"):
+            FFSynchronizer(Signal(), Signal(), stages=1)
+
     def test_basic(self):
         i = Signal()
         o = Signal()
-        frag = MultiReg(i, o)
+        frag = FFSynchronizer(i, o)
         with Simulator(frag) as sim:
             sim.add_clock(1e-6)
             def process():
@@ -26,7 +34,7 @@ class MultiRegTestCase(FHDLTestCase):
     def test_reset_value(self):
         i = Signal(reset=1)
         o = Signal()
-        frag = MultiReg(i, o, reset=1)
+        frag = FFSynchronizer(i, o, reset=1)
         with Simulator(frag) as sim:
             sim.add_clock(1e-6)
             def process():
@@ -43,6 +51,14 @@ class MultiRegTestCase(FHDLTestCase):
 
 
 class ResetSynchronizerTestCase(FHDLTestCase):
+    def test_stages_wrong(self):
+        with self.assertRaises(TypeError,
+                msg="Synchronization stage count must be a positive integer, not '0'"):
+            ResetSynchronizer(Signal(), stages=0)
+        with self.assertRaises(ValueError,
+                msg="Synchronization stage count may not safely be less than 2"):
+            ResetSynchronizer(Signal(), stages=1)
+
     def test_basic(self):
         arst = Signal()
         m = Module()
