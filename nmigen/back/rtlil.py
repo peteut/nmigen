@@ -388,7 +388,7 @@ class _RHSValueCompiler(_ValueCompiler):
         (2, "+"):    "$add",
         (2, "-"):    "$sub",
         (2, "*"):    "$mul",
-        (2, "/"):    "$div",
+        (2, "//"):   "$div",
         (2, "%"):    "$mod",
         (2, "**"):   "$pow",
         (2, "<<"):   "$sshl",
@@ -485,12 +485,11 @@ class _RHSValueCompiler(_ValueCompiler):
         lhs, rhs = value.operands
         lhs_bits, lhs_sign = lhs.shape()
         rhs_bits, rhs_sign = rhs.shape()
-        if lhs_sign == rhs_sign:
+        if lhs_sign == rhs_sign or value.op in ("<<", ">>", "**"):
             lhs_wire = self(lhs)
             rhs_wire = self(rhs)
         else:
             lhs_sign = rhs_sign = True
-            lhs_bits = rhs_bits = max(lhs_bits, rhs_bits)
             lhs_wire = self.match_shape(lhs, lhs_bits, lhs_sign)
             rhs_wire = self.match_shape(rhs, rhs_bits, rhs_sign)
         res_bits, res_sign = value.shape()
@@ -682,9 +681,17 @@ class _StatementCompiler(xfrm.StatementVisitor):
     def on_Switch(self, stmt):
         self._check_rhs(stmt.test)
 
-        if stmt not in self._test_cache:
-            self._test_cache[stmt] = self.rhs_compiler(stmt.test)
-        test_sigspec = self._test_cache[stmt]
+        if not self.state.expansions:
+            # We repeatedly translate the same switches over and over (see the LHSGroupAnalyzer
+            # related code below), and translating the switch test only once helps readability.
+            if stmt not in self._test_cache:
+                self._test_cache[stmt] = self.rhs_compiler(stmt.test)
+            test_sigspec = self._test_cache[stmt]
+        else:
+            # However, if the switch test contains an illegal value, then it may not be cached
+            # (since the illegal value will be repeatedly replaced with different constants), so
+            # don't cache anything in that case.
+            test_sigspec = self.rhs_compiler(stmt.test)
 
         with self._case.switch(test_sigspec, src=src(stmt.src_loc)) as switch:
             for values, stmts in stmt.cases.items():
@@ -718,7 +725,7 @@ class _StatementCompiler(xfrm.StatementVisitor):
                         self._wrap_assign = False
                         branch_value = ast.Const(branch, (width, signed))
                         with self.state.expand_to(legalize.value, branch_value):
-                            super().on_statement(stmt)
+                            self.on_statement(stmt)
             self._wrap_assign = True
 
     def on_statements(self, stmts):

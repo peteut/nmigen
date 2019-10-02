@@ -87,10 +87,10 @@ class Value(metaclass=ABCMeta):
         return Operator("%", [self, other])
     def __rmod__(self, other):
         return Operator("%", [other, self])
-    def __div__(self, other):
-        return Operator("/", [self, other])
-    def __rdiv__(self, other):
-        return Operator("/", [other, self])
+    def __floordiv__(self, other):
+        return Operator("//", [self, other])
+    def __rfloordiv__(self, other):
+        return Operator("//", [other, self])
     def __lshift__(self, other):
         return Operator("<<", [self, other])
     def __rlshift__(self, other):
@@ -475,6 +475,9 @@ class Operator(Value):
                 return width + 1, signed
             if self.op == "*":
                 return a_width + b_width, a_signed or b_signed
+            if self.op == "//":
+                # division by -1 can overflow
+                return a_width + b_signed, a_signed or b_signed
             if self.op == "%":
                 return a_width, a_signed
             if self.op in ("<", "<=", "==", "!=", ">", ">="):
@@ -523,8 +526,9 @@ def Mux(sel, val1, val0):
     Value, out
         Output ``Value``. If ``sel`` is asserted, the Mux returns ``val1``, else ``val0``.
     """
+    sel = Value.wrap(sel)
     if len(sel) != 1:
-        sel = Value.wrap(sel).bool()
+        sel = sel.bool()
     return Operator("m", [sel, val1, val0])
 
 
