@@ -1,6 +1,6 @@
 from collections import OrderedDict
 
-from ...tools import deprecated, extend
+from ..._utils import deprecated, extend
 from ...hdl import ast
 from ...hdl.ast import (DUID, Value, Signal, Mux, Slice as _Slice, Cat, Repl, Const, C,
                         ClockSignal, ResetSignal,
@@ -9,20 +9,12 @@ from ...hdl.cd import ClockDomain
 
 
 __all__ = ["DUID", "wrap", "Mux", "Cat", "Replicate", "Constant", "C", "Signal", "ClockSignal",
-           "ResetSignal", "If", "Case", "Array", "ClockDomain",
-           "SPECIAL_INPUT", "SPECIAL_OUTPUT", "SPECIAL_INOUT"]
+           "ResetSignal", "If", "Case", "Array", "ClockDomain"]
 
 
-@deprecated("instead of `wrap`, use `Value.wrap`")
+@deprecated("instead of `wrap`, use `Value.cast`")
 def wrap(v):
-    return Value.wrap(v)
-
-
-@extend(_Slice)
-@property
-@deprecated("instead of `_Slice.stop`, use `Slice.end`")
-def stop(self):
-    return self.end
+    return Value.cast(v)
 
 
 @extend(Cat)
@@ -52,14 +44,14 @@ def choices(self):
 class If(ast.Switch):
     @deprecated("instead of `If(cond, ...)`, use `with m.If(cond): ...`")
     def __init__(self, cond, *stmts):
-        cond = Value.wrap(cond)
+        cond = Value.cast(cond)
         if len(cond) != 1:
             cond = cond.bool()
         super().__init__(cond, {("1",): ast.Statement.wrap(stmts)})
 
     @deprecated("instead of `.Elif(cond, ...)`, use `with m.Elif(cond): ...`")
     def Elif(self, cond, *stmts):
-        cond = Value.wrap(cond)
+        cond = Value.cast(cond)
         if len(cond) != 1:
             cond = cond.bool()
         self.cases = OrderedDict((("-" + k,), v) for (k,), v in self.cases.items())
@@ -113,6 +105,3 @@ class Case(ast.Switch):
         del self.cases[key]
         self.cases[()] = stmts
         return self
-
-
-(SPECIAL_INPUT, SPECIAL_OUTPUT, SPECIAL_INOUT) = range(3)

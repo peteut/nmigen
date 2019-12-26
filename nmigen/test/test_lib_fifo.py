@@ -1,4 +1,6 @@
-from .tools import *
+# nmigen: UnusedElaboratable=no
+
+from .utils import *
 from ..hdl import *
 from ..asserts import *
 from ..back.pysim import *
@@ -8,10 +10,10 @@ from ..lib.fifo import *
 class FIFOTestCase(FHDLTestCase):
     def test_depth_wrong(self):
         with self.assertRaises(TypeError,
-                msg="FIFO width must be a non-negative integer, not '-1'"):
+                msg="FIFO width must be a non-negative integer, not -1"):
             FIFOInterface(width=-1, depth=8, fwft=True)
         with self.assertRaises(TypeError,
-                msg="FIFO depth must be a non-negative integer, not '-1'"):
+                msg="FIFO depth must be a non-negative integer, not -1"):
             FIFOInterface(width=8, depth=-1, fwft=True)
 
     def test_sync_depth(self):
@@ -67,7 +69,7 @@ class FIFOModel(Elaboratable, FIFOInterface):
         self.r_domain = r_domain
         self.w_domain = w_domain
 
-        self.level = Signal.range(self.depth + 1)
+        self.level = Signal(range(self.depth + 1))
 
     def elaborate(self, platform):
         m = Module()
@@ -76,8 +78,8 @@ class FIFOModel(Elaboratable, FIFOInterface):
         w_port  = m.submodules.w_port = storage.write_port(domain=self.w_domain)
         r_port  = m.submodules.r_port = storage.read_port (domain="comb")
 
-        produce = Signal.range(self.depth)
-        consume = Signal.range(self.depth)
+        produce = Signal(range(self.depth))
+        consume = Signal(range(self.depth))
 
         m.d.comb += self.r_rdy.eq(self.level > 0)
         m.d.comb += r_port.addr.eq((consume + 1) % self.depth)

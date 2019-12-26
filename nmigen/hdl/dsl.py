@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from enum import Enum
 import warnings
 
-from ..tools import flatten, bits_for, deprecated
+from .._utils import flatten, bits_for, deprecated
 from .. import tracer
 from .ast import *
 from .ir import *
@@ -131,7 +131,7 @@ class Module(_ModuleBuilderRoot, Elaboratable):
         self.submodules    = _ModuleBuilderSubmodules(self)
         self.domains       = _ModuleBuilderDomainSet(self)
 
-        self._statements   = Statement.wrap([])
+        self._statements   = Statement.cast([])
         self._ctrl_context = None
         self._ctrl_stack   = []
 
@@ -172,7 +172,7 @@ class Module(_ModuleBuilderRoot, Elaboratable):
         return data
 
     def _check_signed_cond(self, cond):
-        cond = Value.wrap(cond)
+        cond = Value.cast(cond)
         width, signed = cond.shape()
         if signed:
             warnings.warn("Signed values in If/Elif conditions usually result from inverting "
@@ -249,7 +249,7 @@ class Module(_ModuleBuilderRoot, Elaboratable):
     def Switch(self, test):
         self._check_context("Switch", context=None)
         switch_data = self._set_ctrl("Switch", {
-            "test":    Value.wrap(test),
+            "test":    Value.cast(test),
             "cases":   OrderedDict(),
             "src_loc": tracer.get_src_loc(src_loc_at=1),
             "case_src_locs": {},
@@ -383,7 +383,7 @@ class Module(_ModuleBuilderRoot, Elaboratable):
             tests, cases = [], OrderedDict()
             for if_test, if_case in zip(if_tests + [None], if_bodies):
                 if if_test is not None:
-                    if_test = Value.wrap(if_test)
+                    if_test = Value.cast(if_test)
                     if len(if_test) != 1:
                         if_test = if_test.bool()
                     tests.append(if_test)
@@ -433,7 +433,7 @@ class Module(_ModuleBuilderRoot, Elaboratable):
         while len(self._ctrl_stack) > self.domain._depth:
             self._pop_ctrl()
 
-        for assign in Statement.wrap(assigns):
+        for assign in Statement.cast(assigns):
             if not compat_mode and not isinstance(assign, (Assign, Assert, Assume, Cover)):
                 raise SyntaxError(
                     "Only assignments and property checks may be appended to d.{}"
@@ -454,7 +454,7 @@ class Module(_ModuleBuilderRoot, Elaboratable):
 
     def _add_submodule(self, submodule, name=None):
         if not hasattr(submodule, "elaborate"):
-            raise TypeError("Trying to add '{!r}', which does not implement .elaborate(), as "
+            raise TypeError("Trying to add {!r}, which does not implement .elaborate(), as "
                             "a submodule".format(submodule))
         if name == None:
             self._anon_submodules.append(submodule)

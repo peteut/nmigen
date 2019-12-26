@@ -1,4 +1,4 @@
-from ...tools import deprecated
+from ..._utils import deprecated
 from ...lib.cdc import ResetSynchronizer as NativeResetSynchronizer
 
 

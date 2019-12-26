@@ -1,4 +1,4 @@
-from ...tools import deprecated, extend
+from ..._utils import deprecated, extend
 from ...lib.fifo import (FIFOInterface as NativeFIFOInterface,
   SyncFIFO as NativeSyncFIFO, SyncFIFOBuffered as NativeSyncFIFOBuffered,
   AsyncFIFO as NativeAsyncFIFO, AsyncFIFOBuffered as NativeAsyncFIFOBuffered)

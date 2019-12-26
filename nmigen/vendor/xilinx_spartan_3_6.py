@@ -1,6 +1,7 @@
 from abc import abstractproperty
 
 from ..hdl import *
+from ..lib.cdc import ResetSynchronizer
 from ..build import *
 
 
@@ -58,6 +59,7 @@ class XilinxSpartan3Or6Platform(TemplatedPlatform):
     speed   = abstractproperty()
 
     required_tools = [
+        "yosys",
         "xst",
         "ngdbuild",
         "map",
@@ -139,12 +141,12 @@ class XilinxSpartan3Or6Platform(TemplatedPlatform):
     }
     command_templates = [
         r"""
-        {{get_tool("xst")}}
+        {{invoke_tool("xst")}}
             {{get_override("xst_opts")|options}}
             -ifn {{name}}.xst
         """,
         r"""
-        {{get_tool("ngdbuild")}}
+        {{invoke_tool("ngdbuild")}}
             {{quiet("-quiet")}}
             {{verbose("-verbose")}}
             {{get_override("ngdbuild_opts")|options}}
@@ -152,7 +154,7 @@ class XilinxSpartan3Or6Platform(TemplatedPlatform):
             {{name}}.ngc
         """,
         r"""
-        {{get_tool("map")}}
+        {{invoke_tool("map")}}
             {{verbose("-detail")}}
             {{get_override("map_opts")|default([])|options}}
             -w
@@ -161,7 +163,7 @@ class XilinxSpartan3Or6Platform(TemplatedPlatform):
             {{name}}.pcf
         """,
         r"""
-        {{get_tool("par")}}
+        {{invoke_tool("par")}}
             {{get_override("par_opts")|default([])|options}}
             -w
             {{name}}_map.ncd
@@ -169,7 +171,7 @@ class XilinxSpartan3Or6Platform(TemplatedPlatform):
             {{name}}.pcf
         """,
         r"""
-        {{get_tool("bitgen")}}
+        {{invoke_tool("bitgen")}}
             {{get_override("bitgen_opts")|default(["-g Compress"])|options}}
             -w
             -g Binary:Yes
@@ -187,38 +189,37 @@ class XilinxSpartan3Or6Platform(TemplatedPlatform):
         # signal (if available). For details, see:
         #   * https://www.xilinx.com/support/answers/44174.html
         #   * https://www.xilinx.com/support/documentation/white_papers/wp272.pdf
+        if self.family != "6":
+            # Spartan 3 lacks a STARTUP primitive with EOS output; use a simple ResetSynchronizer
+            # in that case, as is the default.
+            return super().create_missing_domain(name)
+
         if name == "sync" and self.default_clk is not None:
             clk_i = self.request(self.default_clk).i
             if self.default_rst is not None:
                 rst_i = self.request(self.default_rst).i
 
             m = Module()
-            ready = Signal()
-            if self.family == "6":
-                m.submodules += Instance("STARTUP_SPARTAN6", o_EOS=ready)
-            else:
-                raise NotImplementedError("Spartan 3 devices lack an end-of-startup signal; "
-                                          "ensure the design has an appropriate reset")
+            eos = Signal()
+            m.submodules += Instance("STARTUP_SPARTAN6", o_EOS=eos)
             m.domains += ClockDomain("sync", reset_less=self.default_rst is None)
-            m.submodules += Instance("BUFGCE", i_CE=ready, i_I=clk_i, o_O=ClockSignal("sync"))
+            m.submodules += Instance("BUFGCE", i_CE=eos, i_I=clk_i, o_O=ClockSignal("sync"))
             if self.default_rst is not None:
-                m.d.comb += ResetSignal("sync").eq(rst_i)
+                m.submodules.reset_sync = ResetSynchronizer(rst_i, domain="sync")
             return m
 
     def _get_xdr_buffer(self, m, pin, *, i_invert=False, o_invert=False):
         def get_dff(clk, d, q):
             # SDR I/O is performed by packing a flip-flop into the pad IOB.
             for bit in range(len(q)):
-                _q = Signal()
-                _q.attrs["IOB"] = "TRUE"
                 m.submodules += Instance("FDCE",
+                    a_IOB="TRUE",
                     i_C=clk,
                     i_CE=Const(1),
                     i_CLR=Const(0),
                     i_D=d[bit],
-                    o_Q=_q,
+                    o_Q=q[bit]
                 )
-                m.d.comb += q[bit].eq(_q)
 
         def get_iddr(clk, d, q0, q1):
             for bit in range(len(q0)):

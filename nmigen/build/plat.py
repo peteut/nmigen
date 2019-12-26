@@ -7,10 +7,8 @@ import jinja2
 
 from .. import __version__
 from .._toolchain import *
-from ..hdl.ast import *
-from ..hdl.cd import *
-from ..hdl.dsl import *
-from ..hdl.ir import *
+from ..hdl import *
+from ..lib.cdc import ResetSynchronizer
 from ..back import rtlil, verilog
 from .res import *
 from .run import *
@@ -50,15 +48,19 @@ class Platform(ResourceManager, metaclass=ABCMeta):
 
     def add_file(self, filename, content):
         if not isinstance(filename, str):
-            raise TypeError("File name must be a string")
-        if filename in self.extra_files:
-            raise ValueError("File {} already exists"
-                             .format(filename))
+            raise TypeError("File name must be a string, not {!r}"
+                            .format(filename))
         if hasattr(content, "read"):
             content = content.read()
         elif not isinstance(content, (str, bytes)):
-            raise TypeError("File contents must be str, bytes, or a file-like object")
-        self.extra_files[filename] = content
+            raise TypeError("File contents must be str, bytes, or a file-like object, not {!r}"
+                            .format(content))
+        if filename in self.extra_files:
+            if self.extra_files[filename] != content:
+                raise ValueError("File {!r} already exists"
+                                 .format(filename))
+        else:
+            self.extra_files[filename] = content
 
     @property
     def _toolchain_env_var(self):
@@ -87,22 +89,25 @@ class Platform(ResourceManager, metaclass=ABCMeta):
             return True
         return all(has_tool(name) for name in self.required_tools)
 
-    @abstractmethod
     def create_missing_domain(self, name):
         # Simple instantiation of a clock domain driven directly by the board clock and reset.
-        # Because of device-specific considerations, this implementation generally does NOT provide
-        # reliable power-on/post-configuration reset, and the logic should be replaced with family
-        # specific logic based on vendor recommendations.
+        # This implementation uses a single ResetSynchronizer to ensure that:
+        #   * an external reset is definitely synchronized to the system clock;
+        #   * release of power-on reset, which is inherently asynchronous, is synchronized to
+        #     the system clock.
+        # Many device families provide advanced primitives for tackling reset. If these exist,
+        # they should be used instead.
         if name == "sync" and self.default_clk is not None:
             clk_i = self.request(self.default_clk).i
             if self.default_rst is not None:
                 rst_i = self.request(self.default_rst).i
+            else:
+                rst_i = Const(0)
 
             m = Module()
-            m.domains += ClockDomain("sync", reset_less=self.default_rst is None)
+            m.domains += ClockDomain("sync")
             m.d.comb += ClockSignal("sync").eq(clk_i)
-            if self.default_rst is not None:
-                m.d.comb += ResetSignal("sync").eq(rst_i)
+            m.submodules.reset_sync = ResetSynchronizer(rst_i, domain="sync")
             return m
 
     def prepare(self, elaboratable, name="top", **kwargs):
@@ -110,7 +115,7 @@ class Platform(ResourceManager, metaclass=ABCMeta):
         self._prepared = True
 
         fragment = Fragment.get(elaboratable, self)
-        fragment.create_missing_domains(self.create_missing_domain)
+        fragment.create_missing_domains(self.create_missing_domain, platform=self)
 
         def add_pin_fragment(pin, pin_fragment):
             pin_fragment = Fragment.get(pin_fragment, self)
@@ -277,23 +282,40 @@ class TemplatedPlatform(Platform):
         def emit_rtlil():
             return rtlil_text
 
-        def emit_verilog():
-            return verilog._convert_rtlil_text(rtlil_text, strip_internal_attrs=True)
+        def emit_verilog(opts=()):
+            return verilog._convert_rtlil_text(rtlil_text,
+                strip_internal_attrs=True, write_verilog_opts=opts)
 
-        def emit_debug_verilog():
-            return verilog._convert_rtlil_text(rtlil_text, strip_internal_attrs=False)
+        def emit_debug_verilog(opts=()):
+            return verilog._convert_rtlil_text(rtlil_text,
+                strip_internal_attrs=False, write_verilog_opts=opts)
 
-        def emit_commands(format):
+        def emit_commands(syntax):
             commands = []
+
+            for name in self.required_tools:
+                env_var = tool_env_var(name)
+                if syntax == "sh":
+                    template = ": ${{{env_var}:={name}}}"
+                elif syntax == "bat":
+                    template = \
+                        "if [%{env_var}%] equ [\"\"] set {env_var}=\n" \
+                        "if [%{env_var}%] equ [] set {env_var}={name}"
+                else:
+                    assert False
+                commands.append(template.format(env_var=env_var, name=name))
+
             for index, command_tpl in enumerate(self.command_templates):
-                command = render(command_tpl, origin="<command#{}>".format(index + 1))
+                command = render(command_tpl, origin="<command#{}>".format(index + 1),
+                                 syntax=syntax)
                 command = re.sub(r"\s+", " ", command)
-                if format == "sh":
+                if syntax == "sh":
                     commands.append(command)
-                elif format == "bat":
+                elif syntax == "bat":
                     commands.append(command + " || exit /b")
                 else:
                     assert False
+
             return "\n".join(commands)
 
         def get_override(var):
@@ -311,6 +333,16 @@ class TemplatedPlatform(Platform):
                     return kwargs[var]
             else:
                 return jinja2.Undefined(name=var)
+
+        @jinja2.contextfunction
+        def invoke_tool(context, name):
+            env_var = tool_env_var(name)
+            if context.parent["syntax"] == "sh":
+                return "\"${}\"".format(env_var)
+            elif context.parent["syntax"] == "bat":
+                return "%{}%".format(env_var)
+            else:
+                assert False
 
         def options(opts):
             if isinstance(opts, str):
@@ -333,7 +365,7 @@ class TemplatedPlatform(Platform):
             else:
                 return arg
 
-        def render(source, origin):
+        def render(source, origin, syntax=None):
             try:
                 source   = textwrap.dedent(source).strip()
                 compiled = jinja2.Template(source, trim_blocks=True, lstrip_blocks=True)
@@ -349,7 +381,8 @@ class TemplatedPlatform(Platform):
                 "emit_verilog": emit_verilog,
                 "emit_debug_verilog": emit_debug_verilog,
                 "emit_commands": emit_commands,
-                "get_tool": get_tool,
+                "syntax": syntax,
+                "invoke_tool": invoke_tool,
                 "get_override": get_override,
                 "verbose": verbose,
                 "quiet": quiet,

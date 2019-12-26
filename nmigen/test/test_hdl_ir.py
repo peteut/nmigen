@@ -1,10 +1,12 @@
+# nmigen: UnusedElaboratable=no
+
 from collections import OrderedDict
 
 from ..hdl.ast import *
 from ..hdl.cd import *
 from ..hdl.ir import *
 from ..hdl.mem import *
-from .tools import *
+from .utils import *
 
 
 class BadElaboratable(Elaboratable):
@@ -15,13 +17,13 @@ class BadElaboratable(Elaboratable):
 class FragmentGetTestCase(FHDLTestCase):
     def test_get_wrong(self):
         with self.assertRaises(AttributeError,
-                msg="Object 'None' cannot be elaborated"):
+                msg="Object None cannot be elaborated"):
             Fragment.get(None, platform=None)
 
         with self.assertWarns(UserWarning,
                 msg=".elaborate() returned None; missing return statement?"):
             with self.assertRaises(AttributeError,
-                    msg="Object 'None' cannot be elaborated"):
+                    msg="Object None cannot be elaborated"):
                 Fragment.get(BadElaboratable(), platform=None)
 
 
@@ -262,6 +264,38 @@ class FragmentPortsTestCase(FHDLTestCase):
         f1._propagate_ports(ports=(), all_undef_as_ports=True)
         self.assertEqual(f1.ports, SignalDict([
             (s, "io")
+        ]))
+
+    def test_in_out_same_signal(self):
+        s = Signal()
+
+        f1 = Instance("foo", i_x=s, o_y=s)
+        f2 = Fragment()
+        f2.add_subfragment(f1)
+
+        f2._propagate_ports(ports=(), all_undef_as_ports=True)
+        self.assertEqual(f1.ports, SignalDict([
+            (s, "o")
+        ]))
+
+        f3 = Instance("foo", o_y=s, i_x=s)
+        f4 = Fragment()
+        f4.add_subfragment(f3)
+
+        f4._propagate_ports(ports=(), all_undef_as_ports=True)
+        self.assertEqual(f3.ports, SignalDict([
+            (s, "o")
+        ]))
+
+    def test_clk_rst(self):
+        sync = ClockDomain()
+        f = Fragment()
+        f.add_domains(sync)
+
+        f = f.prepare(ports=(ClockSignal("sync"), ResetSignal("sync")))
+        self.assertEqual(f.ports, SignalDict([
+            (sync.clk, "i"),
+            (sync.rst, "i"),
         ]))
 
 
@@ -629,6 +663,20 @@ class FragmentHierarchyConflictTestCase(FHDLTestCase):
         self.f1._resolve_hierarchy_conflicts(mode="silent")
         self.assertEqual(self.f1.subfragments, [])
 
+    def test_no_conflict_local_domains(self):
+        f1 = Fragment()
+        cd1 = ClockDomain("d", local=True)
+        f1.add_domains(cd1)
+        f1.add_driver(ClockSignal("d"))
+        f2 = Fragment()
+        cd2 = ClockDomain("d", local=True)
+        f2.add_domains(cd2)
+        f2.add_driver(ClockSignal("d"))
+        f3 = Fragment()
+        f3.add_subfragment(f1)
+        f3.add_subfragment(f2)
+        f3.prepare()
+
 
 class InstanceTestCase(FHDLTestCase):
     def test_construct(self):
@@ -666,6 +714,22 @@ class InstanceTestCase(FHDLTestCase):
             ("s5", (s5, "o")),
             ("s6", (s6, "io")),
         ]))
+
+    def test_cast_ports(self):
+        inst = Instance("foo",
+            ("i", "s1", 1),
+            ("o", "s2", 2),
+            ("io", "s3", 3),
+            i_s4=4,
+            o_s5=5,
+            io_s6=6,
+        )
+        self.assertRepr(inst.named_ports["s1"][0], "(const 1'd1)")
+        self.assertRepr(inst.named_ports["s2"][0], "(const 2'd2)")
+        self.assertRepr(inst.named_ports["s3"][0], "(const 2'd3)")
+        self.assertRepr(inst.named_ports["s4"][0], "(const 3'd4)")
+        self.assertRepr(inst.named_ports["s5"][0], "(const 3'd5)")
+        self.assertRepr(inst.named_ports["s6"][0], "(const 3'd6)")
 
     def test_wrong_construct_arg(self):
         s = Signal()

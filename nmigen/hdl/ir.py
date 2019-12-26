@@ -5,7 +5,7 @@ import warnings
 import traceback
 import sys
 
-from ..tools import *
+from .._utils import *
 from .ast import *
 from .cd import *
 
@@ -21,19 +21,24 @@ class Elaboratable(metaclass=ABCMeta):
     _Elaboratable__silence = False
 
     def __new__(cls, *args, src_loc_at=0, **kwargs):
+        frame = sys._getframe(1 + src_loc_at)
         self = super().__new__(cls)
-        self._Elaboratable__src_loc = traceback.extract_stack(limit=2 + src_loc_at)[0]
         self._Elaboratable__used    = False
+        self._Elaboratable__context = dict(
+            filename=frame.f_code.co_filename,
+            lineno=frame.f_lineno,
+            source=self)
         return self
 
     def __del__(self):
         if self._Elaboratable__silence:
             return
         if hasattr(self, "_Elaboratable__used") and not self._Elaboratable__used:
-            warnings.warn_explicit("{!r} created but never used".format(self), UnusedElaboratable,
-                                   filename=self._Elaboratable__src_loc.filename,
-                                   lineno=self._Elaboratable__src_loc.lineno,
-                                   source=self)
+            if get_linter_option(self._Elaboratable__context["filename"],
+                                 "UnusedElaboratable", bool, True):
+                warnings.warn_explicit(
+                    "{!r} created but never used".format(self), UnusedElaboratable,
+                    **self._Elaboratable__context)
 
 
 _old_excepthook = sys.excepthook
@@ -70,7 +75,7 @@ class Fragment:
                 code = obj.elaborate.__code__
                 obj = obj.elaborate(platform)
             else:
-                raise AttributeError("Object '{!r}' cannot be elaborated".format(obj))
+                raise AttributeError("Object {!r} cannot be elaborated".format(obj))
             if obj is None and code is not None:
                 warnings.warn_explicit(
                     message=".elaborate() returned None; missing return statement?",
@@ -144,7 +149,7 @@ class Fragment:
         yield from self.domains
 
     def add_statements(self, *stmts):
-        self.statements += Statement.wrap(stmts)
+        self.statements += Statement.cast(stmts)
 
     def add_subfragment(self, subfragment, name=None):
         assert isinstance(subfragment, Fragment)
@@ -355,7 +360,7 @@ class Fragment:
 
             subfrag._propagate_domains_down()
 
-    def create_missing_domains(self, missing_domain):
+    def create_missing_domains(self, missing_domain, *, platform=None):
         from .xfrm import DomainCollector
 
         collector = DomainCollector()
@@ -374,7 +379,7 @@ class Fragment:
                 # and there was no chance to add any logic driving it.
                 new_domains.append(value)
             else:
-                new_fragment = Fragment.get(value, platform=None)
+                new_fragment = Fragment.get(value, platform=platform)
                 if domain_name not in new_fragment.domains:
                     defined = new_fragment.domains.keys()
                     raise DomainError(
@@ -428,7 +433,9 @@ class Fragment:
             if isinstance(subfrag, Instance):
                 for port_name, (value, dir) in subfrag.named_ports.items():
                     if dir == "i":
-                        subfrag.add_ports(value._rhs_signals(), dir=dir)
+                        # Prioritize defs over uses.
+                        rhs_without_outputs = value._rhs_signals() - subfrag.iter_ports(dir="o")
+                        subfrag.add_ports(rhs_without_outputs, dir=dir)
                         add_uses(value._rhs_signals())
                     if dir == "o":
                         subfrag.add_ports(value._lhs_signals(), dir=dir)
@@ -535,11 +542,12 @@ class Fragment:
 
         fragment = SampleLowerer()(self)
         new_domains = fragment._propagate_domains(missing_domain)
-        fragment._resolve_hierarchy_conflicts()
         fragment = DomainLowerer()(fragment)
+        fragment._resolve_hierarchy_conflicts()
         if ports is None:
             fragment._propagate_ports(ports=(), all_undef_as_ports=True)
         else:
+            ports = map(DomainLowerer(fragment.domains).on_value, ports)
             new_ports = []
             for cd in new_domains:
                 new_ports.append(cd.clk)
@@ -563,7 +571,7 @@ class Instance(Fragment):
             elif kind == "p":
                 self.parameters[name] = value
             elif kind in ("i", "o", "io"):
-                self.named_ports[name] = (value, kind)
+                self.named_ports[name] = (Value.cast(value), kind)
             else:
                 raise NameError("Instance argument {!r} should be a tuple (kind, name, value) "
                                 "where kind is one of \"p\", \"i\", \"o\", or \"io\""
@@ -575,11 +583,11 @@ class Instance(Fragment):
             elif kw.startswith("p_"):
                 self.parameters[kw[2:]] = arg
             elif kw.startswith("i_"):
-                self.named_ports[kw[2:]] = (arg, "i")
+                self.named_ports[kw[2:]] = (Value.cast(arg), "i")
             elif kw.startswith("o_"):
-                self.named_ports[kw[2:]] = (arg, "o")
+                self.named_ports[kw[2:]] = (Value.cast(arg), "o")
             elif kw.startswith("io_"):
-                self.named_ports[kw[3:]] = (arg, "io")
+                self.named_ports[kw[3:]] = (Value.cast(arg), "io")
             else:
                 raise NameError("Instance keyword argument {}={!r} does not start with one of "
                                 "\"p_\", \"i_\", \"o_\", or \"io_\""

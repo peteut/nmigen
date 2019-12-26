@@ -21,10 +21,10 @@ def _yosys_version():
     return tuple(map(int, tag.split("."))), offset
 
 
-def _convert_rtlil_text(rtlil_text, *, strip_internal_attrs=False):
+def _convert_rtlil_text(rtlil_text, *, strip_internal_attrs=False, write_verilog_opts=()):
     version, offset = _yosys_version()
     if version < (0, 9):
-        raise YosysError("Yosys %d.%d is not suppored", *version)
+        raise YosysError("Yosys {}.{} is not supported".format(*version))
 
     attr_map = []
     if strip_internal_attrs:
@@ -39,6 +39,7 @@ def _convert_rtlil_text(rtlil_text, *, strip_internal_attrs=False):
 read_ilang <<rtlil
 {}
 rtlil
+{prune}delete w:$verilog_initial_trigger
 {prune}proc_prune
 proc_init
 proc_arst
@@ -47,10 +48,11 @@ proc_clean
 memory_collect
 attrmap {attr_map}
 attrmap -modattr {attr_map}
-write_verilog -norename
+write_verilog -norename {write_verilog_opts}
 """.format(rtlil_text,
         prune="# " if version == (0, 9) and offset == 0 else "",
         attr_map=" ".join(attr_map),
+        write_verilog_opts=" ".join(write_verilog_opts),
     )
 
     popen = subprocess.Popen([require_tool("yosys"), "-q", "-"],

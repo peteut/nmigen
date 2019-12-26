@@ -2,7 +2,7 @@ from abc import ABCMeta, abstractmethod
 from collections import OrderedDict
 from collections.abc import Iterable
 
-from ..tools import flatten, deprecated
+from .._utils import flatten, deprecated
 from .. import tracer
 from .ast import *
 from .ast import _StatementList
@@ -83,7 +83,7 @@ class ValueVisitor(metaclass=ABCMeta):
         pass # :nocov:
 
     def on_unknown_value(self, value):
-        raise TypeError("Cannot transform value '{!r}'".format(value)) # :nocov:
+        raise TypeError("Cannot transform value {!r}".format(value)) # :nocov:
 
     def replace_value_src_loc(self, value, new_value):
         return True
@@ -157,10 +157,10 @@ class ValueTransformer(ValueVisitor):
         return value
 
     def on_Operator(self, value):
-        return Operator(value.op, [self.on_value(o) for o in value.operands])
+        return Operator(value.operator, [self.on_value(o) for o in value.operands])
 
     def on_Slice(self, value):
-        return Slice(self.on_value(value.value), value.start, value.end)
+        return Slice(self.on_value(value.value), value.start, value.stop)
 
     def on_Part(self, value):
         return Part(self.on_value(value.value), self.on_value(value.offset),
@@ -209,7 +209,7 @@ class StatementVisitor(metaclass=ABCMeta):
         pass # :nocov:
 
     def on_unknown_statement(self, stmt):
-        raise TypeError("Cannot transform statement '{!r}'".format(stmt)) # :nocov:
+        raise TypeError("Cannot transform statement {!r}".format(stmt)) # :nocov:
 
     def replace_statement_src_loc(self, stmt, new_stmt):
         return True
@@ -310,22 +310,22 @@ class FragmentTransformer:
         self.map_drivers(fragment, new_fragment)
         return new_fragment
 
-    def __call__(self, value):
+    def __call__(self, value, *, src_loc_at=0):
         if isinstance(value, Fragment):
             return self.on_fragment(value)
         elif isinstance(value, TransformedElaboratable):
             value._transforms_.append(self)
             return value
         elif hasattr(value, "elaborate"):
-            value = TransformedElaboratable(value)
+            value = TransformedElaboratable(value, src_loc_at=1 + src_loc_at)
             value._transforms_.append(self)
             return value
         else:
-            raise AttributeError("Object '{!r}' cannot be elaborated".format(value))
+            raise AttributeError("Object {!r} cannot be elaborated".format(value))
 
 
 class TransformedElaboratable(Elaboratable):
-    def __init__(self, elaboratable):
+    def __init__(self, elaboratable, *, src_loc_at=0):
         assert hasattr(elaboratable, "elaborate")
 
         # Fields prefixed and suffixed with underscore to avoid as many conflicts with the inner
@@ -486,8 +486,8 @@ class DomainRenamer(FragmentTransformer, ValueTransformer, StatementTransformer)
 
 
 class DomainLowerer(FragmentTransformer, ValueTransformer, StatementTransformer):
-    def __init__(self):
-        self.domains = None
+    def __init__(self, domains=None):
+        self.domains = domains
 
     def _resolve(self, domain, context):
         if domain not in self.domains:
@@ -725,9 +725,9 @@ class _ControlInserter(FragmentTransformer):
     def _insert_control(self, fragment, domain, signals):
         raise NotImplementedError # :nocov:
 
-    def __call__(self, value):
-        self.src_loc = tracer.get_src_loc()
-        return super().__call__(value)
+    def __call__(self, value, *, src_loc_at=0):
+        self.src_loc = tracer.get_src_loc(src_loc_at=src_loc_at)
+        return super().__call__(value, src_loc_at=1 + src_loc_at)
 
 
 class ResetInserter(_ControlInserter):

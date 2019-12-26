@@ -3,7 +3,10 @@ from setuptools import setup, find_packages
 
 def scm_version():
     def local_scheme(version):
-        return version.format_choice("+{node}", "+{node}.dirty")
+        if version.tag and not version.distance:
+            return version.format_with("")
+        else:
+            return version.format_choice("+{node}", "+{node}.dirty")
     return {
         "relative_to": __file__,
         "version_scheme": "guess-next-dev",
@@ -21,7 +24,11 @@ setup(
     license="BSD",
     python_requires="~=3.6",
     setup_requires=["setuptools_scm"],
-    install_requires=["setuptools", "pyvcd>=0.1.4", "bitarray", "Jinja2"],
+    install_requires=[
+        "setuptools",
+        "pyvcd~=0.1.4", # for nmigen.pysim
+        "Jinja2", # for nmigen.build
+    ],
     packages=find_packages(),
     entry_points={
         "console_scripts": [

@@ -3,9 +3,8 @@ from collections import OrderedDict
 from functools import reduce
 
 from .. import tracer
-from ..tools import union
+from .._utils import union, deprecated
 from .ast import *
-from .ast import _enum_shape
 
 
 __all__ = ["Direction", "DIR_NONE", "DIR_FANOUT", "DIR_FANIN", "Layout", "Record"]
@@ -20,12 +19,18 @@ DIR_FANIN  = Direction.FANIN
 
 class Layout:
     @staticmethod
-    def wrap(obj):
+    def cast(obj, *, src_loc_at=0):
         if isinstance(obj, Layout):
             return obj
-        return Layout(obj)
+        return Layout(obj, src_loc_at=1 + src_loc_at)
 
-    def __init__(self, fields):
+    # TODO(nmigen-0.2): remove this
+    @classmethod
+    @deprecated("instead of `Layout.wrap`, use `Layout.cast`")
+    def wrap(cls, obj, *, src_loc_at=0):
+        return cls.cast(obj, src_loc_at=1 + src_loc_at)
+
+    def __init__(self, fields, *, src_loc_at=0):
         self.fields = OrderedDict()
         for field in fields:
             if not isinstance(field, tuple) or len(field) not in (2, 3):
@@ -36,7 +41,7 @@ class Layout:
                 name, shape = field
                 direction = DIR_NONE
                 if isinstance(shape, list):
-                    shape = Layout.wrap(shape)
+                    shape = Layout.cast(shape)
             else:
                 name, shape, direction = field
                 if not isinstance(direction, Direction):
@@ -46,17 +51,16 @@ class Layout:
             if not isinstance(name, str):
                 raise TypeError("Field {!r} has invalid name: should be a string"
                                 .format(field))
-            if isinstance(shape, type) and issubclass(shape, Enum):
-                shape = _enum_shape(shape)
-            if not isinstance(shape, (int, tuple, Layout)):
-                raise TypeError("Field {!r} has invalid shape: should be an int, tuple, Enum, or "
-                                "list of fields of a nested record"
-                                .format(field))
+            if not isinstance(shape, Layout):
+                try:
+                    shape = Shape.cast(shape, src_loc_at=1 + src_loc_at)
+                except Exception as error:
+                    raise TypeError("Field {!r} has invalid shape: should be castable to Shape "
+                                    "or a list of fields of a nested record"
+                                    .format(field))
             if name in self.fields:
                 raise NameError("Field {!r} has a name that is already present in the layout"
                                 .format(field))
-            if isinstance(shape, int):
-                shape = (shape, False)
             self.fields[name] = (shape, direction)
 
     def __getitem__(self, item):
@@ -79,8 +83,8 @@ class Layout:
 
 # Unlike most Values, Record *can* be subclassed.
 class Record(Value):
-    @classmethod
-    def like(cls, other, *, name=None, name_suffix=None, src_loc_at=0):
+    @staticmethod
+    def like(other, *, name=None, name_suffix=None, src_loc_at=0):
         if name is not None:
             new_name = str(name)
         elif name_suffix is not None:
@@ -103,9 +107,9 @@ class Record(Value):
                 fields[field_name] = Signal.like(field, name=concat(new_name, field_name),
                                                  src_loc_at=1 + src_loc_at)
 
-        return cls(other.layout, new_name, fields=fields, src_loc_at=1)
+        return Record(other.layout, name=new_name, fields=fields, src_loc_at=1)
 
-    def __init__(self, layout, name=None, *, fields=None, src_loc_at=0):
+    def __init__(self, layout, *, name=None, fields=None, src_loc_at=0):
         if name is None:
             name = tracer.get_var_name(depth=2 + src_loc_at, default=None)
 
@@ -117,7 +121,7 @@ class Record(Value):
                 return b
             return "{}__{}".format(a, b)
 
-        self.layout = Layout.wrap(layout)
+        self.layout = Layout.cast(layout, src_loc_at=1 + src_loc_at)
         self.fields = OrderedDict()
         for field_name, field_shape, field_dir in self.layout:
             if fields is not None and field_name in fields:
@@ -159,7 +163,7 @@ class Record(Value):
             return super().__getitem__(item)
 
     def shape(self):
-        return sum(len(f) for f in self.fields.values()), False
+        return Shape(sum(len(f) for f in self.fields.values()))
 
     def _lhs_signals(self):
         return union((f._lhs_signals() for f in self.fields.values()), start=SignalSet())

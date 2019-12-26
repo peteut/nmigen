@@ -1,7 +1,7 @@
 from collections import OrderedDict
 
 from ..build.dsl import *
-from .tools import *
+from .utils import *
 
 
 class PinsTestCase(FHDLTestCase):
@@ -16,6 +16,10 @@ class PinsTestCase(FHDLTestCase):
     def test_invert(self):
         p = PinsN("A0")
         self.assertEqual(repr(p), "(pins-n io A0)")
+        self.assertEqual(p.invert, True)
+
+    def test_invert_arg(self):
+        p = Pins("A0", invert=True)
         self.assertEqual(p.invert, True)
 
     def test_conn(self):

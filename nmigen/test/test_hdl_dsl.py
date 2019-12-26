@@ -1,10 +1,12 @@
+# nmigen: UnusedElaboratable=no
+
 from collections import OrderedDict
 from enum import Enum
 
 from ..hdl.ast import *
 from ..hdl.cd import *
 from ..hdl.dsl import *
-from .tools import *
+from .utils import *
 
 
 class DSLTestCase(FHDLTestCase):
@@ -368,7 +370,7 @@ class DSLTestCase(FHDLTestCase):
             RED  = 1
             BLUE = 2
         m = Module()
-        se = Signal.enum(Color)
+        se = Signal(Color)
         with m.Switch(se):
             with m.Case(Color.RED):
                 m.d.comb += self.c1.eq(1)
@@ -625,10 +627,10 @@ class DSLTestCase(FHDLTestCase):
     def test_submodule_wrong(self):
         m = Module()
         with self.assertRaises(TypeError,
-                msg="Trying to add '1', which does not implement .elaborate(), as a submodule"):
+                msg="Trying to add 1, which does not implement .elaborate(), as a submodule"):
             m.submodules.foo = 1
         with self.assertRaises(TypeError,
-                msg="Trying to add '1', which does not implement .elaborate(), as a submodule"):
+                msg="Trying to add 1, which does not implement .elaborate(), as a submodule"):
             m.submodules += 1
 
     def test_submodule_named_conflict(self):
