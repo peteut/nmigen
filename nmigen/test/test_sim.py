@@ -1,7 +1,8 @@
+import os
 from contextlib import contextmanager
 
-from .tools import *
-from ..tools import flatten, union
+from .utils import *
+from .._utils import flatten, union
 from ..hdl.ast import *
 from ..hdl.cd import  *
 from ..hdl.mem import *
@@ -13,8 +14,8 @@ from ..back.pysim import *
 
 class SimulatorUnitTestCase(FHDLTestCase):
     def assertStatement(self, stmt, inputs, output, reset=0):
-        inputs = [Value.wrap(i) for i in inputs]
-        output = Value.wrap(output)
+        inputs = [Value.cast(i) for i in inputs]
+        output = Value.cast(output)
 
         isigs = [Signal(i.shape(), name=n) for i, n in zip(inputs, "abcd")]
         osig  = Signal(output.shape(), name="y", reset=reset)
@@ -22,19 +23,17 @@ class SimulatorUnitTestCase(FHDLTestCase):
         stmt = stmt(osig, *isigs)
         frag = Fragment()
         frag.add_statements(stmt)
-        for signal in flatten(s._lhs_signals() for s in Statement.wrap(stmt)):
+        for signal in flatten(s._lhs_signals() for s in Statement.cast(stmt)):
             frag.add_driver(signal)
 
-        with Simulator(frag,
-                vcd_file =open("test.vcd",  "w"),
-                gtkw_file=open("test.gtkw", "w"),
-                traces=[*isigs, osig]) as sim:
-            def process():
-                for isig, input in zip(isigs, inputs):
-                    yield isig.eq(input)
-                yield Delay()
-                self.assertEqual((yield osig), output.value)
-            sim.add_process(process)
+        sim = Simulator(frag)
+        def process():
+            for isig, input in zip(isigs, inputs):
+                yield isig.eq(input)
+            yield Settle()
+            self.assertEqual((yield osig), output.value)
+        sim.add_process(process)
+        with sim.write_vcd("test.vcd", "test.gtkw", traces=[*isigs, osig]):
             sim.run()
 
     def test_invert(self):
@@ -57,6 +56,27 @@ class SimulatorUnitTestCase(FHDLTestCase):
         self.assertStatement(stmt, [C(1, 4)], C(1))
         self.assertStatement(stmt, [C(2, 4)], C(1))
 
+    def test_any(self):
+        stmt = lambda y, a: y.eq(a.any())
+        self.assertStatement(stmt, [C(0b00, 2)], C(0))
+        self.assertStatement(stmt, [C(0b01, 2)], C(1))
+        self.assertStatement(stmt, [C(0b10, 2)], C(1))
+        self.assertStatement(stmt, [C(0b11, 2)], C(1))
+
+    def test_all(self):
+        stmt = lambda y, a: y.eq(a.all())
+        self.assertStatement(stmt, [C(0b00, 2)], C(0))
+        self.assertStatement(stmt, [C(0b01, 2)], C(0))
+        self.assertStatement(stmt, [C(0b10, 2)], C(0))
+        self.assertStatement(stmt, [C(0b11, 2)], C(1))
+
+    def test_xor_unary(self):
+        stmt = lambda y, a: y.eq(a.xor())
+        self.assertStatement(stmt, [C(0b00, 2)], C(0))
+        self.assertStatement(stmt, [C(0b01, 2)], C(1))
+        self.assertStatement(stmt, [C(0b10, 2)], C(1))
+        self.assertStatement(stmt, [C(0b11, 2)], C(0))
+
     def test_add(self):
         stmt = lambda y, a, b: y.eq(a + b)
         self.assertStatement(stmt, [C(0,  4), C(1,  4)], C(1,   4))
@@ -74,6 +94,12 @@ class SimulatorUnitTestCase(FHDLTestCase):
         self.assertStatement(stmt, [C(2,  4), C(2,  4)], C(4,   8))
         self.assertStatement(stmt, [C(7,  4), C(7,  4)], C(49,  8))
 
+    def test_floordiv(self):
+        stmt = lambda y, a, b: y.eq(a // b)
+        self.assertStatement(stmt, [C(2,  4), C(1,  4)], C(2,   8))
+        self.assertStatement(stmt, [C(2,  4), C(2,  4)], C(1,   8))
+        self.assertStatement(stmt, [C(7,  4), C(2,  4)], C(3,   8))
+
     def test_and(self):
         stmt = lambda y, a, b: y.eq(a & b)
         self.assertStatement(stmt, [C(0b1100, 4), C(0b1010, 4)], C(0b1000, 4))
@@ -82,7 +108,7 @@ class SimulatorUnitTestCase(FHDLTestCase):
         stmt = lambda y, a, b: y.eq(a | b)
         self.assertStatement(stmt, [C(0b1100, 4), C(0b1010, 4)], C(0b1110, 4))
 
-    def test_xor(self):
+    def test_xor_binary(self):
         stmt = lambda y, a, b: y.eq(a ^ b)
         self.assertStatement(stmt, [C(0b1100, 4), C(0b1010, 4)], C(0b0110, 4))
 
@@ -186,6 +212,13 @@ class SimulatorUnitTestCase(FHDLTestCase):
         stmt = lambda y, a: [Cat(l, m, n).eq(a), y.eq(Cat(n, m, l))]
         self.assertStatement(stmt, [C(0b100101110, 9)], C(0b110101100, 9))
 
+    def test_nested_cat_lhs(self):
+        l = Signal(3)
+        m = Signal(3)
+        n = Signal(3)
+        stmt = lambda y, a: [Cat(Cat(l, Cat(m)), n).eq(a), y.eq(Cat(n, m, l))]
+        self.assertStatement(stmt, [C(0b100101110, 9)], C(0b110101100, 9))
+
     def test_record(self):
         rec = Record([
             ("l", 1),
@@ -250,8 +283,9 @@ class SimulatorUnitTestCase(FHDLTestCase):
 class SimulatorIntegrationTestCase(FHDLTestCase):
     @contextmanager
     def assertSimulation(self, module, deadline=None):
-        with Simulator(module.elaborate(platform=None)) as sim:
-            yield sim
+        sim = Simulator(module)
+        yield sim
+        with sim.write_vcd("test.vcd", "test.gtkw"):
             if deadline is None:
                 sim.run()
             else:
@@ -273,10 +307,14 @@ class SimulatorIntegrationTestCase(FHDLTestCase):
                 yield Delay(1e-6)
                 self.assertEqual((yield self.count), 4)
                 yield self.sync.clk.eq(1)
+                self.assertEqual((yield self.count), 4)
+                yield Settle()
                 self.assertEqual((yield self.count), 5)
                 yield Delay(1e-6)
                 self.assertEqual((yield self.count), 5)
                 yield self.sync.clk.eq(0)
+                self.assertEqual((yield self.count), 5)
+                yield Settle()
                 self.assertEqual((yield self.count), 5)
                 for _ in range(3):
                     yield Delay(1e-6)
@@ -300,6 +338,26 @@ class SimulatorIntegrationTestCase(FHDLTestCase):
                     yield
                 self.assertEqual((yield self.count), 0)
             sim.add_sync_process(process)
+
+    def test_reset(self):
+        self.setUp_counter()
+        sim = Simulator(self.m)
+        sim.add_clock(1e-6)
+        times = 0
+        def process():
+            nonlocal times
+            self.assertEqual((yield self.count), 4)
+            yield
+            self.assertEqual((yield self.count), 5)
+            yield
+            self.assertEqual((yield self.count), 6)
+            yield
+            times += 1
+        sim.add_sync_process(process)
+        sim.run()
+        sim.reset()
+        sim.run()
+        self.assertEqual(times, 2)
 
     def setUp_alu(self):
         self.a = Signal(8)
@@ -379,7 +437,7 @@ class SimulatorIntegrationTestCase(FHDLTestCase):
             def process():
                 yield self.i.eq(0b10101010)
                 yield self.i[:4].eq(-1)
-                yield Delay()
+                yield Settle()
                 self.assertEqual((yield self.i[:4]), 0b1111)
                 self.assertEqual((yield self.i), 0b10101111)
             sim.add_process(process)
@@ -399,11 +457,19 @@ class SimulatorIntegrationTestCase(FHDLTestCase):
     def test_add_process_wrong(self):
         with self.assertSimulation(Module()) as sim:
             with self.assertRaises(TypeError,
-                    msg="Cannot add a process '1' because it is not a generator or "
-                        "a generator function"):
+                    msg="Cannot add a process 1 because it is not a generator function"):
                 sim.add_process(1)
 
-    def test_add_clock_wrong(self):
+    def test_add_process_wrong_generator(self):
+        with self.assertSimulation(Module()) as sim:
+            with self.assertWarns(DeprecationWarning,
+                    msg="instead of generators, use generator functions as processes; "
+                        "this allows the simulator to be repeatedly reset"):
+                def process():
+                    yield Delay()
+                sim.add_process(process())
+
+    def test_add_clock_wrong_twice(self):
         m = Module()
         s = Signal()
         m.d.sync += s.eq(0)
@@ -413,37 +479,30 @@ class SimulatorIntegrationTestCase(FHDLTestCase):
                     msg="Domain 'sync' already has a clock driving it"):
                 sim.add_clock(1)
 
-    def test_eq_signal_unused_wrong(self):
-        self.setUp_lhs_rhs()
-        self.s = Signal()
-        with self.assertSimulation(self.m) as sim:
-            def process():
-                with self.assertRaisesRegex(ValueError,
-                        regex=r"Process '.+?' sent a request to set signal '\(sig s\)', "
-                              r"which is not a part of simulation"):
-                    yield self.s.eq(0)
-                yield Delay()
-            sim.add_process(process)
+    def test_add_clock_wrong_missing(self):
+        m = Module()
+        with self.assertSimulation(m) as sim:
+            with self.assertRaises(ValueError,
+                    msg="Domain 'sync' is not present in simulation"):
+                sim.add_clock(1)
 
-    def test_eq_signal_comb_wrong(self):
-        self.setUp_lhs_rhs()
-        with self.assertSimulation(self.m) as sim:
-            def process():
-                with self.assertRaisesRegex(ValueError,
-                        regex=r"Process '.+?' sent a request to set signal '\(sig o\)', "
-                              r"which is a part of combinatorial assignment in simulation"):
-                    yield self.o.eq(0)
-                yield Delay()
-            sim.add_process(process)
+    def test_add_clock_if_exists(self):
+        m = Module()
+        with self.assertSimulation(m) as sim:
+            sim.add_clock(1, if_exists=True)
 
     def test_command_wrong(self):
+        survived = False
         with self.assertSimulation(Module()) as sim:
             def process():
+                nonlocal survived
                 with self.assertRaisesRegex(TypeError,
-                        regex=r"Received unsupported command '1' from process '.+?'"):
+                        regex=r"Received unsupported command 1 from process .+?"):
                     yield 1
-                yield Delay()
+                yield Settle()
+                survived = True
             sim.add_process(process)
+        self.assertTrue(survived)
 
     def setUp_memory(self, rd_synchronous=True, rd_transparent=True, wr_granularity=None):
         self.m = Module()
@@ -515,12 +574,11 @@ class SimulatorIntegrationTestCase(FHDLTestCase):
             def process():
                 yield self.wrport.data.eq(0x33)
                 yield self.wrport.en.eq(1)
-                yield self.rdport.en.eq(1)
-                yield
-                self.assertEqual((yield self.rdport.data), 0x00)
                 yield
                 self.assertEqual((yield self.rdport.data), 0xaa)
-                yield Delay(1e-6) # let comb propagate
+                yield
+                self.assertEqual((yield self.rdport.data), 0xaa)
+                yield Settle()
                 self.assertEqual((yield self.rdport.data), 0x33)
             sim.add_clock(1e-6)
             sim.add_sync_process(process)
@@ -533,11 +591,11 @@ class SimulatorIntegrationTestCase(FHDLTestCase):
                 yield self.wrport.en.eq(1)
                 yield
                 self.assertEqual((yield self.rdport.data), 0xaa)
-                yield Delay(1e-6) # let comb propagate
+                yield Settle()
                 self.assertEqual((yield self.rdport.data), 0x33)
                 yield
                 yield self.rdport.addr.eq(1)
-                yield Delay(1e-6) # let comb propagate
+                yield Settle()
                 self.assertEqual((yield self.rdport.data), 0x33)
             sim.add_clock(1e-6)
             sim.add_sync_process(process)
@@ -547,10 +605,10 @@ class SimulatorIntegrationTestCase(FHDLTestCase):
         with self.assertSimulation(self.m) as sim:
             def process():
                 yield self.rdport.addr.eq(0)
-                yield Delay()
+                yield Settle()
                 self.assertEqual((yield self.rdport.data), 0xaa)
                 yield self.rdport.addr.eq(1)
-                yield Delay()
+                yield Settle()
                 self.assertEqual((yield self.rdport.data), 0x55)
                 yield self.rdport.addr.eq(0)
                 yield self.wrport.addr.eq(0)
@@ -558,7 +616,7 @@ class SimulatorIntegrationTestCase(FHDLTestCase):
                 yield self.wrport.en.eq(1)
                 yield Tick("sync")
                 self.assertEqual((yield self.rdport.data), 0xaa)
-                yield Delay(1e-6) # let comb propagate
+                yield Settle()
                 self.assertEqual((yield self.rdport.data), 0x33)
             sim.add_clock(1e-6)
             sim.add_process(process)
@@ -623,8 +681,26 @@ class SimulatorIntegrationTestCase(FHDLTestCase):
             sim.add_sync_process(process_gen)
             sim.add_sync_process(process_check)
 
-    def test_wrong_not_run(self):
-        with self.assertWarns(UserWarning,
-                msg="Simulation created, but not run"):
-            with Simulator(Fragment()) as sim:
+    def test_vcd_wrong_nonzero_time(self):
+        s = Signal()
+        m = Module()
+        m.d.sync += s.eq(s)
+        sim = Simulator(m)
+        sim.add_clock(1e-6)
+        sim.run_until(1e-5)
+        with self.assertRaisesRegex(ValueError,
+                regex=r"^Cannot start writing waveforms after advancing simulation time$"):
+            with sim.write_vcd(open(os.path.devnull, "wt")):
                 pass
+
+    def test_vcd_wrong_twice(self):
+        s = Signal()
+        m = Module()
+        m.d.sync += s.eq(s)
+        sim = Simulator(m)
+        sim.add_clock(1e-6)
+        with self.assertRaisesRegex(ValueError,
+                regex=r"^Already writing waveforms to .+$"):
+            with sim.write_vcd(open(os.path.devnull, "wt")):
+                with sim.write_vcd(open(os.path.devnull, "wt")):
+                    pass

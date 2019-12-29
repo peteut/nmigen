@@ -2,7 +2,7 @@ from abc import ABCMeta, abstractmethod
 from collections import OrderedDict
 from collections.abc import Iterable
 
-from ..tools import flatten, deprecated
+from .._utils import flatten, deprecated
 from .. import tracer
 from .ast import *
 from .ast import _StatementList
@@ -83,7 +83,7 @@ class ValueVisitor(metaclass=ABCMeta):
         pass # :nocov:
 
     def on_unknown_value(self, value):
-        raise TypeError("Cannot transform value '{!r}'".format(value)) # :nocov:
+        raise TypeError("Cannot transform value {!r}".format(value)) # :nocov:
 
     def replace_value_src_loc(self, value, new_value):
         return True
@@ -157,10 +157,10 @@ class ValueTransformer(ValueVisitor):
         return value
 
     def on_Operator(self, value):
-        return Operator(value.op, [self.on_value(o) for o in value.operands])
+        return Operator(value.operator, [self.on_value(o) for o in value.operands])
 
     def on_Slice(self, value):
-        return Slice(self.on_value(value.value), value.start, value.end)
+        return Slice(self.on_value(value.value), value.start, value.stop)
 
     def on_Part(self, value):
         return Part(self.on_value(value.value), self.on_value(value.offset),
@@ -197,6 +197,10 @@ class StatementVisitor(metaclass=ABCMeta):
         pass # :nocov:
 
     @abstractmethod
+    def on_Cover(self, stmt):
+        pass # :nocov:
+
+    @abstractmethod
     def on_Switch(self, stmt):
         pass # :nocov:
 
@@ -205,7 +209,7 @@ class StatementVisitor(metaclass=ABCMeta):
         pass # :nocov:
 
     def on_unknown_statement(self, stmt):
-        raise TypeError("Cannot transform statement '{!r}'".format(stmt)) # :nocov:
+        raise TypeError("Cannot transform statement {!r}".format(stmt)) # :nocov:
 
     def replace_statement_src_loc(self, stmt, new_stmt):
         return True
@@ -217,6 +221,8 @@ class StatementVisitor(metaclass=ABCMeta):
             new_stmt = self.on_Assert(stmt)
         elif type(stmt) is Assume:
             new_stmt = self.on_Assume(stmt)
+        elif type(stmt) is Cover:
+            new_stmt = self.on_Cover(stmt)
         elif isinstance(stmt, Switch):
             # Uses `isinstance()` and not `type() is` because nmigen.compat requires it.
             new_stmt = self.on_Switch(stmt)
@@ -246,6 +252,9 @@ class StatementTransformer(StatementVisitor):
 
     def on_Assume(self, stmt):
         return Assume(self.on_value(stmt.test), _check=stmt._check, _en=stmt._en)
+
+    def on_Cover(self, stmt):
+        return Cover(self.on_value(stmt.test), _check=stmt._check, _en=stmt._en)
 
     def on_Switch(self, stmt):
         cases = OrderedDict((k, self.on_statement(s)) for k, s in stmt.cases.items())
@@ -301,22 +310,22 @@ class FragmentTransformer:
         self.map_drivers(fragment, new_fragment)
         return new_fragment
 
-    def __call__(self, value):
+    def __call__(self, value, *, src_loc_at=0):
         if isinstance(value, Fragment):
             return self.on_fragment(value)
         elif isinstance(value, TransformedElaboratable):
             value._transforms_.append(self)
             return value
         elif hasattr(value, "elaborate"):
-            value = TransformedElaboratable(value)
+            value = TransformedElaboratable(value, src_loc_at=1 + src_loc_at)
             value._transforms_.append(self)
             return value
         else:
-            raise AttributeError("Object '{!r}' cannot be elaborated".format(value))
+            raise AttributeError("Object {!r} cannot be elaborated".format(value))
 
 
 class TransformedElaboratable(Elaboratable):
-    def __init__(self, elaboratable):
+    def __init__(self, elaboratable, *, src_loc_at=0):
         assert hasattr(elaboratable, "elaborate")
 
         # Fields prefixed and suffixed with underscore to avoid as many conflicts with the inner
@@ -336,7 +345,16 @@ class TransformedElaboratable(Elaboratable):
 
 class DomainCollector(ValueVisitor, StatementVisitor):
     def __init__(self):
-        self.domains = set()
+        self.used_domains = set()
+        self.defined_domains = set()
+        self._local_domains = set()
+
+    def _add_used_domain(self, domain_name):
+        if domain_name is None:
+            return
+        if domain_name in self._local_domains:
+            return
+        self.used_domains.add(domain_name)
 
     def on_ignore(self, value):
         pass
@@ -347,10 +365,10 @@ class DomainCollector(ValueVisitor, StatementVisitor):
     on_Signal = on_ignore
 
     def on_ClockSignal(self, value):
-        self.domains.add(value.domain)
+        self._add_used_domain(value.domain)
 
     def on_ResetSignal(self, value):
-        self.domains.add(value.domain)
+        self._add_used_domain(value.domain)
 
     on_Record = on_ignore
 
@@ -387,11 +405,12 @@ class DomainCollector(ValueVisitor, StatementVisitor):
         self.on_value(stmt.lhs)
         self.on_value(stmt.rhs)
 
-    def on_Assert(self, stmt):
+    def on_property(self, stmt):
         self.on_value(stmt.test)
 
-    def on_Assume(self, stmt):
-        self.on_value(stmt.test)
+    on_Assert = on_property
+    on_Assume = on_property
+    on_Cover  = on_property
 
     def on_Switch(self, stmt):
         self.on_value(stmt.test)
@@ -406,14 +425,24 @@ class DomainCollector(ValueVisitor, StatementVisitor):
         if isinstance(fragment, Instance):
             for name, (value, dir) in fragment.named_ports.items():
                 self.on_value(value)
+
+        old_local_domains, self._local_domains = self._local_domains, set(self._local_domains)
+        for domain_name, domain in fragment.domains.items():
+            if domain.local:
+                self._local_domains.add(domain_name)
+            else:
+                self.defined_domains.add(domain_name)
+
         self.on_statements(fragment.statements)
-        self.domains.update(fragment.drivers.keys())
+        for domain_name in fragment.drivers:
+            self._add_used_domain(domain_name)
         for subfragment, name in fragment.subfragments:
             self.on_fragment(subfragment)
 
+        self._local_domains = old_local_domains
+
     def __call__(self, fragment):
         self.on_fragment(fragment)
-        return self.domains
 
 
 class DomainRenamer(FragmentTransformer, ValueTransformer, StatementTransformer):
@@ -457,7 +486,7 @@ class DomainRenamer(FragmentTransformer, ValueTransformer, StatementTransformer)
 
 
 class DomainLowerer(FragmentTransformer, ValueTransformer, StatementTransformer):
-    def __init__(self, domains):
+    def __init__(self, domains=None):
         self.domains = domains
 
     def _resolve(self, domain, context):
@@ -474,18 +503,35 @@ class DomainLowerer(FragmentTransformer, ValueTransformer, StatementTransformer)
         return not isinstance(value, (ClockSignal, ResetSignal))
 
     def on_ClockSignal(self, value):
-        cd = self._resolve(value.domain, value)
-        return cd.clk
+        domain = self._resolve(value.domain, value)
+        return domain.clk
 
     def on_ResetSignal(self, value):
-        cd = self._resolve(value.domain, value)
-        if cd.rst is None:
+        domain = self._resolve(value.domain, value)
+        if domain.rst is None:
             if value.allow_reset_less:
                 return Const(0)
             else:
                 raise DomainError("Signal {!r} refers to reset of reset-less domain '{}'"
                                   .format(value, value.domain))
-        return cd.rst
+        return domain.rst
+
+    def _insert_resets(self, fragment):
+        for domain_name, signals in fragment.drivers.items():
+            if domain_name is None:
+                continue
+            domain = fragment.domains[domain_name]
+            if domain.rst is None:
+                continue
+            stmts = [signal.eq(Const(signal.reset, signal.width))
+                     for signal in signals if not signal.reset_less]
+            fragment.add_statements(Switch(domain.rst, {1: stmts}))
+
+    def on_fragment(self, fragment):
+        self.domains = fragment.domains
+        new_fragment = super().on_fragment(fragment)
+        self._insert_resets(new_fragment)
+        return new_fragment
 
 
 class SampleDomainInjector(ValueTransformer, StatementTransformer):
@@ -562,12 +608,13 @@ class SampleLowerer(FragmentTransformer, ValueTransformer, StatementTransformer)
 
 
 class SwitchCleaner(StatementVisitor):
-    def on_Assign(self, stmt):
+    def on_ignore(self, stmt):
         return stmt
 
-    on_Assert = on_Assign
-
-    on_Assume = on_Assign
+    on_Assign = on_ignore
+    on_Assert = on_ignore
+    on_Assume = on_ignore
+    on_Cover  = on_ignore
 
     def on_Switch(self, stmt):
         cases = OrderedDict((k, self.on_statement(s)) for k, s in stmt.cases.items())
@@ -615,9 +662,14 @@ class LHSGroupAnalyzer(StatementVisitor):
         if lhs_signals:
             self.unify(*stmt._lhs_signals())
 
-    on_Assert = on_Assign
+    def on_property(self, stmt):
+        lhs_signals = stmt._lhs_signals()
+        if lhs_signals:
+            self.unify(*stmt._lhs_signals())
 
-    on_Assume = on_Assign
+    on_Assert = on_property
+    on_Assume = on_property
+    on_Cover  = on_property
 
     def on_Switch(self, stmt):
         for case_stmts in stmt.cases.values():
@@ -645,12 +697,14 @@ class LHSGroupFilter(SwitchCleaner):
             if any_lhs_signal in self.signals:
                 return stmt
 
-    def on_Assert(self, stmt):
+    def on_property(self, stmt):
         any_lhs_signal = next(iter(stmt._lhs_signals()))
         if any_lhs_signal in self.signals:
             return stmt
 
-    on_Assume = on_Assert
+    on_Assert = on_property
+    on_Assume = on_property
+    on_Cover  = on_property
 
 
 class _ControlInserter(FragmentTransformer):
@@ -671,14 +725,14 @@ class _ControlInserter(FragmentTransformer):
     def _insert_control(self, fragment, domain, signals):
         raise NotImplementedError # :nocov:
 
-    def __call__(self, value):
-        self.src_loc = tracer.get_src_loc()
-        return super().__call__(value)
+    def __call__(self, value, *, src_loc_at=0):
+        self.src_loc = tracer.get_src_loc(src_loc_at=src_loc_at)
+        return super().__call__(value, src_loc_at=1 + src_loc_at)
 
 
 class ResetInserter(_ControlInserter):
     def _insert_control(self, fragment, domain, signals):
-        stmts = [s.eq(Const(s.reset, s.nbits)) for s in signals if not s.reset_less]
+        stmts = [s.eq(Const(s.reset, s.width)) for s in signals if not s.reset_less]
         fragment.add_statements(Switch(self.controls[domain], {1: stmts}, src_loc=self.src_loc))
 
 
@@ -698,4 +752,5 @@ class EnableInserter(_ControlInserter):
         return new_fragment
 
 
-CEInserter = deprecated("instead of `CEInserter`, use `EnableInserter`")(EnableInserter)
+CEInserter = staticmethod(
+    deprecated("instead of `CEInserter`, use `EnableInserter`")(EnableInserter))

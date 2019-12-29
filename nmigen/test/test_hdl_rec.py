@@ -1,13 +1,21 @@
+from enum import Enum
+
 from ..hdl.ast import *
 from ..hdl.rec import *
-from .tools import *
+from .utils import *
+
+
+class UnsignedEnum(Enum):
+    FOO = 1
+    BAR = 2
+    BAZ = 3
 
 
 class LayoutTestCase(FHDLTestCase):
     def test_fields(self):
-        layout = Layout.wrap([
+        layout = Layout.cast([
             ("cyc",  1),
-            ("data", (32, True)),
+            ("data", signed(32)),
             ("stb",  1, DIR_FANOUT),
             ("ack",  1, DIR_FANIN),
             ("info", [
@@ -25,13 +33,27 @@ class LayoutTestCase(FHDLTestCase):
         self.assertEqual(sublayout["a"], ((1, False), DIR_NONE))
         self.assertEqual(sublayout["b"], ((1, False), DIR_NONE))
 
+    def test_enum_field(self):
+        layout = Layout.cast([
+            ("enum", UnsignedEnum),
+            ("enum_dir", UnsignedEnum, DIR_FANOUT),
+        ])
+        self.assertEqual(layout["enum"], ((2, False), DIR_NONE))
+        self.assertEqual(layout["enum_dir"], ((2, False), DIR_FANOUT))
+
+    def test_range_field(self):
+        layout = Layout.cast([
+            ("range", range(0, 7)),
+        ])
+        self.assertEqual(layout["range"], ((3, False), DIR_NONE))
+
     def test_slice_tuple(self):
-        layout = Layout.wrap([
+        layout = Layout.cast([
             ("a", 1),
             ("b", 2),
             ("c", 3)
         ])
-        expect = Layout.wrap([
+        expect = Layout.cast([
             ("a", 1),
             ("c", 3)
         ])
@@ -41,29 +63,29 @@ class LayoutTestCase(FHDLTestCase):
         with self.assertRaises(TypeError,
                 msg="Field (1,) has invalid layout: should be either (name, shape) or "
                     "(name, shape, direction)"):
-            Layout.wrap([(1,)])
+            Layout.cast([(1,)])
 
     def test_wrong_name(self):
         with self.assertRaises(TypeError,
                 msg="Field (1, 1) has invalid name: should be a string"):
-            Layout.wrap([(1, 1)])
+            Layout.cast([(1, 1)])
 
     def test_wrong_name_duplicate(self):
         with self.assertRaises(NameError,
                 msg="Field ('a', 2) has a name that is already present in the layout"):
-            Layout.wrap([("a", 1), ("a", 2)])
+            Layout.cast([("a", 1), ("a", 2)])
 
     def test_wrong_direction(self):
         with self.assertRaises(TypeError,
                 msg="Field ('a', 1, 0) has invalid direction: should be a Direction "
                     "instance like DIR_FANIN"):
-            Layout.wrap([("a", 1, 0)])
+            Layout.cast([("a", 1, 0)])
 
     def test_wrong_shape(self):
         with self.assertRaises(TypeError,
-                msg="Field ('a', 'x') has invalid shape: should be an int, tuple, or "
-                    "list of fields of a nested record"):
-            Layout.wrap([("a", "x")])
+                msg="Field ('a', 'x') has invalid shape: should be castable to Shape or "
+                    "a list of fields of a nested record"):
+            Layout.cast([("a", "x")])
 
 
 class RecordTestCase(FHDLTestCase):

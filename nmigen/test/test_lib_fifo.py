@@ -1,101 +1,110 @@
-from .tools import *
+# nmigen: UnusedElaboratable=no
+
+from .utils import *
 from ..hdl import *
-from ..formal import *
+from ..asserts import *
 from ..back.pysim import *
 from ..lib.fifo import *
 
 
-class FIFOSmokeTestCase(FHDLTestCase):
-    def assertSyncFIFOWorks(self, fifo, xfrm=lambda x: x):
-        with Simulator(xfrm(Fragment.get(fifo, None)), vcd_file=open("test.vcd", "w")) as sim:
-            sim.add_clock(1e-6)
-            def process():
-                yield from fifo.write(1)
-                yield from fifo.write(2)
-                while not (yield fifo.readable):
-                    yield
-                if not fifo.fwft:
-                    yield fifo.re.eq(1)
-                yield
-                self.assertEqual((yield from fifo.read()), 1)
-                self.assertEqual((yield from fifo.read()), 2)
-            sim.add_sync_process(process)
-            sim.run()
+class FIFOTestCase(FHDLTestCase):
+    def test_depth_wrong(self):
+        with self.assertRaises(TypeError,
+                msg="FIFO width must be a non-negative integer, not -1"):
+            FIFOInterface(width=-1, depth=8, fwft=True)
+        with self.assertRaises(TypeError,
+                msg="FIFO depth must be a non-negative integer, not -1"):
+            FIFOInterface(width=8, depth=-1, fwft=True)
 
-    def assertAsyncFIFOWorks(self, fifo):
-        self.assertSyncFIFOWorks(fifo, xfrm=DomainRenamer({"read": "sync", "write": "sync"}))
+    def test_sync_depth(self):
+        self.assertEqual(SyncFIFO(width=8, depth=0).depth, 0)
+        self.assertEqual(SyncFIFO(width=8, depth=1).depth, 1)
+        self.assertEqual(SyncFIFO(width=8, depth=2).depth, 2)
 
-    def test_sync_fwft(self):
-        self.assertSyncFIFOWorks(SyncFIFO(width=8, depth=4, fwft=True))
+    def test_sync_buffered_depth(self):
+        self.assertEqual(SyncFIFOBuffered(width=8, depth=0).depth, 0)
+        self.assertEqual(SyncFIFOBuffered(width=8, depth=1).depth, 1)
+        self.assertEqual(SyncFIFOBuffered(width=8, depth=2).depth, 2)
 
-    def test_sync_not_fwft(self):
-        self.assertSyncFIFOWorks(SyncFIFO(width=8, depth=4, fwft=False))
+    def test_async_depth(self):
+        self.assertEqual(AsyncFIFO(width=8, depth=0 ).depth, 0)
+        self.assertEqual(AsyncFIFO(width=8, depth=1 ).depth, 1)
+        self.assertEqual(AsyncFIFO(width=8, depth=2 ).depth, 2)
+        self.assertEqual(AsyncFIFO(width=8, depth=3 ).depth, 4)
+        self.assertEqual(AsyncFIFO(width=8, depth=4 ).depth, 4)
+        self.assertEqual(AsyncFIFO(width=8, depth=15).depth, 16)
+        self.assertEqual(AsyncFIFO(width=8, depth=16).depth, 16)
+        self.assertEqual(AsyncFIFO(width=8, depth=17).depth, 32)
 
-    def test_sync_buffered(self):
-        self.assertSyncFIFOWorks(SyncFIFO(width=8, depth=4, fwft=True))
+    def test_async_depth_wrong(self):
+        with self.assertRaises(ValueError,
+                msg="AsyncFIFO only supports depths that are powers of 2; "
+                    "requested exact depth 15 is not"):
+            AsyncFIFO(width=8, depth=15, exact_depth=True)
 
-    def test_async(self):
-        self.assertAsyncFIFOWorks(AsyncFIFO(width=8, depth=4))
+    def test_async_buffered_depth(self):
+        self.assertEqual(AsyncFIFOBuffered(width=8, depth=0 ).depth, 0)
+        self.assertEqual(AsyncFIFOBuffered(width=8, depth=1 ).depth, 2)
+        self.assertEqual(AsyncFIFOBuffered(width=8, depth=2 ).depth, 2)
+        self.assertEqual(AsyncFIFOBuffered(width=8, depth=3 ).depth, 3)
+        self.assertEqual(AsyncFIFOBuffered(width=8, depth=4 ).depth, 5)
+        self.assertEqual(AsyncFIFOBuffered(width=8, depth=15).depth, 17)
+        self.assertEqual(AsyncFIFOBuffered(width=8, depth=16).depth, 17)
+        self.assertEqual(AsyncFIFOBuffered(width=8, depth=17).depth, 17)
+        self.assertEqual(AsyncFIFOBuffered(width=8, depth=18).depth, 33)
 
-    def test_async_buffered(self):
-        self.assertAsyncFIFOWorks(AsyncFIFOBuffered(width=8, depth=3))
-
+    def test_async_buffered_depth_wrong(self):
+        with self.assertRaises(ValueError,
+                msg="AsyncFIFOBuffered only supports depths that are one higher than powers of 2; "
+                    "requested exact depth 16 is not"):
+            AsyncFIFOBuffered(width=8, depth=16, exact_depth=True)
 
 class FIFOModel(Elaboratable, FIFOInterface):
     """
     Non-synthesizable first-in first-out queue, implemented naively as a chain of registers.
     """
-    def __init__(self, width, depth, fwft, rdomain, wdomain):
-        super().__init__(width, depth, fwft)
+    def __init__(self, *, width, depth, fwft, r_domain, w_domain):
+        super().__init__(width=width, depth=depth, fwft=fwft)
 
-        self.rdomain = rdomain
-        self.wdomain = wdomain
+        self.r_domain = r_domain
+        self.w_domain = w_domain
 
-        self.replace = Signal()
-        self.level   = Signal(max=self.depth + 1)
+        self.level = Signal(range(self.depth + 1))
 
     def elaborate(self, platform):
         m = Module()
 
-        storage = Memory(self.width, self.depth)
-        wrport  = m.submodules.wrport = storage.write_port(domain=self.wdomain)
-        rdport  = m.submodules.rdport = storage.read_port (domain="comb")
+        storage = Memory(width=self.width, depth=self.depth)
+        w_port  = m.submodules.w_port = storage.write_port(domain=self.w_domain)
+        r_port  = m.submodules.r_port = storage.read_port (domain="comb")
 
-        produce = Signal(max=self.depth)
-        consume = Signal(max=self.depth)
+        produce = Signal(range(self.depth))
+        consume = Signal(range(self.depth))
 
-        m.d.comb += self.readable.eq(self.level > 0)
-        m.d.comb += rdport.addr.eq((consume + 1) % self.depth)
+        m.d.comb += self.r_rdy.eq(self.level > 0)
+        m.d.comb += r_port.addr.eq((consume + 1) % self.depth)
         if self.fwft:
-            m.d.comb += self.dout.eq(rdport.data)
-        with m.If(self.re & self.readable):
+            m.d.comb += self.r_data.eq(r_port.data)
+        with m.If(self.r_en & self.r_rdy):
             if not self.fwft:
-                m.d[self.rdomain] += self.dout.eq(rdport.data)
-            m.d[self.rdomain] += consume.eq(rdport.addr)
+                m.d[self.r_domain] += self.r_data.eq(r_port.data)
+            m.d[self.r_domain] += consume.eq(r_port.addr)
 
-        m.d.comb += self.writable.eq(self.level < self.depth)
-        m.d.comb += wrport.data.eq(self.din)
-        with m.If(self.we):
-            with m.If(~self.replace & self.writable):
-                m.d.comb += wrport.addr.eq((produce + 1) % self.depth)
-                m.d.comb += wrport.en.eq(1)
-                m.d[self.wdomain] += produce.eq(wrport.addr)
-            with m.If(self.replace):
-                # The result of trying to replace an element in an empty queue is irrelevant.
-                # The result of trying to replace the element that is currently being read
-                # is undefined.
-                m.d.comb += Assume(self.level > 0)
-                m.d.comb += wrport.addr.eq(produce)
-                m.d.comb += wrport.en.eq(1)
+        m.d.comb += self.w_rdy.eq(self.level < self.depth)
+        m.d.comb += w_port.data.eq(self.w_data)
+        with m.If(self.w_en & self.w_rdy):
+            m.d.comb += w_port.addr.eq((produce + 1) % self.depth)
+            m.d.comb += w_port.en.eq(1)
+            m.d[self.w_domain] += produce.eq(w_port.addr)
 
-        with m.If(ResetSignal(self.rdomain) | ResetSignal(self.wdomain)):
+        with m.If(ResetSignal(self.r_domain) | ResetSignal(self.w_domain)):
             m.d.sync += self.level.eq(0)
         with m.Else():
             m.d.sync += self.level.eq(self.level
-                + (self.writable & self.we & ~self.replace)
-                - (self.readable & self.re))
+                + (self.w_rdy & self.w_en)
+                - (self.r_rdy & self.r_en))
 
-        m.d.comb += Assert(ResetSignal(self.rdomain) == ResetSignal(self.wdomain))
+        m.d.comb += Assert(ResetSignal(self.r_domain) == ResetSignal(self.w_domain))
 
         return m
 
@@ -106,40 +115,36 @@ class FIFOModelEquivalenceSpec(Elaboratable):
     signals, the behavior of the implementation under test exactly matches the ideal model,
     except for behavior not defined by the model.
     """
-    def __init__(self, fifo, rdomain, wdomain):
+    def __init__(self, fifo, r_domain, w_domain):
         self.fifo = fifo
 
-        self.rdomain = rdomain
-        self.wdomain = wdomain
+        self.r_domain = r_domain
+        self.w_domain = w_domain
 
     def elaborate(self, platform):
         m = Module()
         m.submodules.dut  = dut  = self.fifo
-        m.submodules.gold = gold = FIFOModel(dut.width, dut.depth, dut.fwft,
-                                             self.rdomain, self.wdomain)
+        m.submodules.gold = gold = FIFOModel(width=dut.width, depth=dut.depth, fwft=dut.fwft,
+                                             r_domain=self.r_domain, w_domain=self.w_domain)
 
         m.d.comb += [
-            gold.re.eq(dut.readable & dut.re),
-            gold.we.eq(dut.we),
-            gold.din.eq(dut.din),
+            gold.r_en.eq(dut.r_rdy & dut.r_en),
+            gold.w_en.eq(dut.w_en),
+            gold.w_data.eq(dut.w_data),
         ]
-        if hasattr(dut, "replace"):
-            m.d.comb += gold.replace.eq(dut.replace)
-        else:
-            m.d.comb += gold.replace.eq(0)
 
-        m.d.comb += Assert(dut.readable.implies(gold.readable))
-        m.d.comb += Assert(dut.writable.implies(gold.writable))
+        m.d.comb += Assert(dut.r_rdy.implies(gold.r_rdy))
+        m.d.comb += Assert(dut.w_rdy.implies(gold.w_rdy))
         if hasattr(dut, "level"):
             m.d.comb += Assert(dut.level == gold.level)
 
         if dut.fwft:
-            m.d.comb += Assert(dut.readable
-                               .implies(dut.dout == gold.dout))
+            m.d.comb += Assert(dut.r_rdy
+                               .implies(dut.r_data == gold.r_data))
         else:
-            m.d.comb += Assert((Past(dut.readable, domain=self.rdomain) &
-                                Past(dut.re, domain=self.rdomain))
-                               .implies(dut.dout == gold.dout))
+            m.d.comb += Assert((Past(dut.r_rdy, domain=self.r_domain) &
+                                Past(dut.r_en, domain=self.r_domain))
+                               .implies(dut.r_data == gold.r_data))
 
         return m
 
@@ -150,11 +155,11 @@ class FIFOContractSpec(Elaboratable):
     consecutively, they must be read out consecutively at some later point, no matter all other
     circumstances, with the exception of reset.
     """
-    def __init__(self, fifo, rdomain, wdomain, bound):
-        self.fifo    = fifo
-        self.rdomain = rdomain
-        self.wdomain = wdomain
-        self.bound   = bound
+    def __init__(self, fifo, *, r_domain, w_domain, bound):
+        self.fifo     = fifo
+        self.r_domain = r_domain
+        self.w_domain = w_domain
+        self.bound    = bound
 
     def elaborate(self, platform):
         m = Module()
@@ -162,48 +167,45 @@ class FIFOContractSpec(Elaboratable):
 
         m.domains += ClockDomain("sync")
         m.d.comb += ResetSignal().eq(0)
-        if self.wdomain != "sync":
-            m.domains += ClockDomain(self.wdomain)
-            m.d.comb += ResetSignal(self.wdomain).eq(0)
-        if self.rdomain != "sync":
-            m.domains += ClockDomain(self.rdomain)
-            m.d.comb += ResetSignal(self.rdomain).eq(0)
-
-        if hasattr(fifo, "replace"):
-            m.d.comb += fifo.replace.eq(0)
+        if self.w_domain != "sync":
+            m.domains += ClockDomain(self.w_domain)
+            m.d.comb += ResetSignal(self.w_domain).eq(0)
+        if self.r_domain != "sync":
+            m.domains += ClockDomain(self.r_domain)
+            m.d.comb += ResetSignal(self.r_domain).eq(0)
 
         entry_1 = AnyConst(fifo.width)
         entry_2 = AnyConst(fifo.width)
 
-        with m.FSM(domain=self.wdomain) as write_fsm:
+        with m.FSM(domain=self.w_domain) as write_fsm:
             with m.State("WRITE-1"):
-                with m.If(fifo.writable):
+                with m.If(fifo.w_rdy):
                     m.d.comb += [
-                        fifo.din.eq(entry_1),
-                        fifo.we.eq(1)
+                        fifo.w_data.eq(entry_1),
+                        fifo.w_en.eq(1)
                     ]
                     m.next = "WRITE-2"
             with m.State("WRITE-2"):
-                with m.If(fifo.writable):
+                with m.If(fifo.w_rdy):
                     m.d.comb += [
-                        fifo.din.eq(entry_2),
-                        fifo.we.eq(1)
+                        fifo.w_data.eq(entry_2),
+                        fifo.w_en.eq(1)
                     ]
                     m.next = "DONE"
 
-        with m.FSM(domain=self.rdomain) as read_fsm:
+        with m.FSM(domain=self.r_domain) as read_fsm:
             read_1 = Signal(fifo.width)
             read_2 = Signal(fifo.width)
             with m.State("READ"):
-                m.d.comb += fifo.re.eq(1)
+                m.d.comb += fifo.r_en.eq(1)
                 if fifo.fwft:
-                    readable = fifo.readable
+                    r_rdy = fifo.r_rdy
                 else:
-                    readable = Past(fifo.readable, domain=self.rdomain)
-                with m.If(readable):
+                    r_rdy = Past(fifo.r_rdy, domain=self.r_domain)
+                with m.If(r_rdy):
                     m.d.sync += [
                         read_1.eq(read_2),
-                        read_2.eq(fifo.dout),
+                        read_2.eq(fifo.r_data),
                     ]
                 with m.If((read_1 == entry_1) & (read_2 == entry_2)):
                     m.next = "DONE"
@@ -214,18 +216,18 @@ class FIFOContractSpec(Elaboratable):
         with m.If(Past(Initial(), self.bound - 1)):
             m.d.comb += Assert(read_fsm.ongoing("DONE"))
 
-        if self.wdomain != "sync" or self.rdomain != "sync":
-            m.d.comb += Assume(Rose(ClockSignal(self.wdomain)) |
-                               Rose(ClockSignal(self.rdomain)))
+        if self.w_domain != "sync" or self.r_domain != "sync":
+            m.d.comb += Assume(Rose(ClockSignal(self.w_domain)) |
+                               Rose(ClockSignal(self.r_domain)))
 
         return m
 
 
 class FIFOFormalCase(FHDLTestCase):
     def check_sync_fifo(self, fifo):
-        self.assertFormal(FIFOModelEquivalenceSpec(fifo, rdomain="sync", wdomain="sync"),
+        self.assertFormal(FIFOModelEquivalenceSpec(fifo, r_domain="sync", w_domain="sync"),
                           mode="bmc", depth=fifo.depth + 1)
-        self.assertFormal(FIFOContractSpec(fifo, rdomain="sync", wdomain="sync",
+        self.assertFormal(FIFOContractSpec(fifo, r_domain="sync", w_domain="sync",
                                            bound=fifo.depth * 2 + 1),
                           mode="hybrid", depth=fifo.depth * 2 + 1)
 
@@ -253,9 +255,9 @@ class FIFOFormalCase(FHDLTestCase):
     def check_async_fifo(self, fifo):
         # TODO: properly doing model equivalence checking on this likely requires multiclock,
         # which is not really documented nor is it clear how to use it.
-        # self.assertFormal(FIFOModelEquivalenceSpec(fifo, rdomain="read", wdomain="write"),
+        # self.assertFormal(FIFOModelEquivalenceSpec(fifo, r_domain="read", w_domain="write"),
         #                   mode="bmc", depth=fifo.depth * 3 + 1)
-        self.assertFormal(FIFOContractSpec(fifo, rdomain="read", wdomain="write",
+        self.assertFormal(FIFOContractSpec(fifo, r_domain="read", w_domain="write",
                                            bound=fifo.depth * 4 + 1),
                           mode="hybrid", depth=fifo.depth * 4 + 1)
 
@@ -263,4 +265,4 @@ class FIFOFormalCase(FHDLTestCase):
         self.check_async_fifo(AsyncFIFO(width=8, depth=4))
 
     def test_async_buffered(self):
-        self.check_async_fifo(AsyncFIFOBuffered(width=8, depth=3))
+        self.check_async_fifo(AsyncFIFOBuffered(width=8, depth=4))

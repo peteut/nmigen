@@ -2,6 +2,13 @@ from nmigen import *
 
 
 class UART(Elaboratable):
+    """
+    Parameters
+    ----------
+    divisor : int
+        Set to ``round(clk-rate / baud-rate)``.
+        E.g. ``12e6 / 115200`` = ``104``.
+    """
     def __init__(self, divisor, data_bits=8):
         assert divisor >= 4
 
@@ -24,9 +31,9 @@ class UART(Elaboratable):
     def elaborate(self, platform):
         m = Module()
 
-        tx_phase = Signal(max=self.divisor)
+        tx_phase = Signal(range(self.divisor))
         tx_shreg = Signal(1 + self.data_bits + 1, reset=-1)
-        tx_count = Signal(max=len(tx_shreg) + 1)
+        tx_count = Signal(range(len(tx_shreg) + 1))
 
         m.d.comb += self.tx_o.eq(tx_shreg[0])
         with m.If(tx_count == 0):
@@ -47,9 +54,9 @@ class UART(Elaboratable):
                     tx_phase.eq(self.divisor - 1),
                 ]
 
-        rx_phase = Signal(max=self.divisor)
+        rx_phase = Signal(range(self.divisor))
         rx_shreg = Signal(1 + self.data_bits + 1, reset=-1)
-        rx_count = Signal(max=len(rx_shreg) + 1)
+        rx_count = Signal(range(len(rx_shreg) + 1))
 
         m.d.comb += self.rx_data.eq(rx_shreg[1:-1])
         with m.If(rx_count == 0):
@@ -96,44 +103,41 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     if args.action == "simulate":
-        from nmigen.hdl.ast import Passive
-        from nmigen.back import pysim
+        from nmigen.back.pysim import Simulator, Passive
 
-        with pysim.Simulator(uart,
-                vcd_file=open("uart.vcd", "w"),
-                gtkw_file=open("uart.gtkw", "w"),
-                traces=ports) as sim:
-            sim.add_clock(1e-6)
+        sim = Simulator(uart)
+        sim.add_clock(1e-6)
 
-            def loopback_proc():
-                yield Passive()
-                while True:
-                    yield uart.rx_i.eq((yield uart.tx_o))
-                    yield
-            sim.add_sync_process(loopback_proc())
-
-            def transmit_proc():
-                assert (yield uart.tx_ack)
-                assert not (yield uart.rx_rdy)
-
-                yield uart.tx_data.eq(0x5A)
-                yield uart.tx_rdy.eq(1)
+        def loopback_proc():
+            yield Passive()
+            while True:
+                yield uart.rx_i.eq((yield uart.tx_o))
                 yield
-                yield uart.tx_rdy.eq(0)
-                yield
-                assert not (yield uart.tx_ack)
+        sim.add_sync_process(loopback_proc)
 
-                for _ in range(uart.divisor * 12): yield
+        def transmit_proc():
+            assert (yield uart.tx_ack)
+            assert not (yield uart.rx_rdy)
 
-                assert (yield uart.tx_ack)
-                assert (yield uart.rx_rdy)
-                assert not (yield uart.rx_err)
-                assert (yield uart.rx_data) == 0x5A
+            yield uart.tx_data.eq(0x5A)
+            yield uart.tx_rdy.eq(1)
+            yield
+            yield uart.tx_rdy.eq(0)
+            yield
+            assert not (yield uart.tx_ack)
 
-                yield uart.rx_ack.eq(1)
-                yield
-            sim.add_sync_process(transmit_proc())
+            for _ in range(uart.divisor * 12): yield
 
+            assert (yield uart.tx_ack)
+            assert (yield uart.rx_rdy)
+            assert not (yield uart.rx_err)
+            assert (yield uart.rx_data) == 0x5A
+
+            yield uart.rx_ack.eq(1)
+            yield
+        sim.add_sync_process(transmit_proc)
+
+        with sim.write_vcd("uart.vcd", "uart.gtkw"):
             sim.run()
 
     if args.action == "generate":

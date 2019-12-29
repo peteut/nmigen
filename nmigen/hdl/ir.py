@@ -6,7 +6,7 @@ import traceback
 import sys
 from functools import lru_cache
 
-from ..tools import *
+from .._utils import *
 from .ast import *
 from .cd import *
 
@@ -22,19 +22,24 @@ class Elaboratable(metaclass=ABCMeta):
     _Elaboratable__silence = False
 
     def __new__(cls, *args, src_loc_at=0, **kwargs):
+        frame = sys._getframe(1 + src_loc_at)
         self = super().__new__(cls)
-        self._Elaboratable__src_loc = traceback.extract_stack(limit=2 + src_loc_at)[0]
         self._Elaboratable__used    = False
+        self._Elaboratable__context = dict(
+            filename=frame.f_code.co_filename,
+            lineno=frame.f_lineno,
+            source=self)
         return self
 
     def __del__(self):
         if self._Elaboratable__silence:
             return
         if hasattr(self, "_Elaboratable__used") and not self._Elaboratable__used:
-            warnings.warn_explicit("{!r} created but never used".format(self), UnusedElaboratable,
-                                   filename=self._Elaboratable__src_loc.filename,
-                                   lineno=self._Elaboratable__src_loc.lineno,
-                                   source=self)
+            if get_linter_option(self._Elaboratable__context["filename"],
+                                 "UnusedElaboratable", bool, True):
+                warnings.warn_explicit(
+                    "{!r} created but never used".format(self), UnusedElaboratable,
+                    **self._Elaboratable__context)
 
 
 _old_excepthook = sys.excepthook
@@ -71,7 +76,7 @@ class Fragment:
                 code = obj.elaborate.__code__
                 obj = obj.elaborate(platform)
             else:
-                raise AttributeError("Object '{!r}' cannot be elaborated".format(obj))
+                raise AttributeError("Object {!r} cannot be elaborated".format(obj))
             if obj is None and code is not None:
                 warnings.warn_explicit(
                     message=".elaborate() returned None; missing return statement?",
@@ -145,7 +150,7 @@ class Fragment:
         yield from self.domains
 
     def add_statements(self, *stmts):
-        self.statements += Statement.wrap(stmts)
+        self.statements += Statement.cast(stmts)
 
     def add_subfragment(self, subfragment, name=None):
         assert isinstance(subfragment, Fragment)
@@ -306,12 +311,14 @@ class Fragment:
             subfrag._propagate_domains_up(hierarchy + (hier_name,))
 
             # Second, classify subfragments by domains they define.
-            for domain in subfrag.iter_domains():
-                domain_subfrags[domain].add((subfrag, name, i))
+            for domain_name, domain in subfrag.domains.items():
+                if domain.local:
+                    continue
+                domain_subfrags[domain_name].add((subfrag, name, i))
 
         # For each domain defined by more than one subfragment, rename the domain in each
         # of the subfragments such that they no longer conflict.
-        for domain, subfrags in domain_subfrags.items():
+        for domain_name, subfrags in domain_subfrags.items():
             if len(subfrags) == 1:
                 continue
 
@@ -322,7 +329,7 @@ class Fragment:
                 raise DomainError("Domain '{}' is defined by subfragments {} of fragment '{}'; "
                                   "it is necessary to either rename subfragment domains "
                                   "explicitly, or give names to subfragments"
-                                  .format(domain, ", ".join(names), ".".join(hierarchy)))
+                                  .format(domain_name, ", ".join(names), ".".join(hierarchy)))
 
             if len(names) != len(set(names)):
                 names = sorted("#{}".format(i) for f, n, i in subfrags)
@@ -330,16 +337,18 @@ class Fragment:
                                   "some of which have identical names; it is necessary to either "
                                   "rename subfragment domains explicitly, or give distinct names "
                                   "to subfragments"
-                                  .format(domain, ", ".join(names), ".".join(hierarchy)))
+                                  .format(domain_name, ", ".join(names), ".".join(hierarchy)))
 
             for subfrag, name, i in subfrags:
-                self.subfragments[i] = \
-                    (DomainRenamer({domain: "{}_{}".format(name, domain)})(subfrag), name)
+                domain_name_map = {domain_name: "{}_{}".format(name, domain_name)}
+                self.subfragments[i] = (DomainRenamer(domain_name_map)(subfrag), name)
 
         # Finally, collect the (now unique) subfragment domains, and merge them into our domains.
         for subfrag, name in self.subfragments:
-            for domain in subfrag.iter_domains():
-                self.add_domains(subfrag.domains[domain])
+            for domain_name, domain in subfrag.domains.items():
+                if domain.local:
+                    continue
+                self.add_domains(domain)
 
     def _propagate_domains_down(self):
         # For each domain defined in this fragment, ensure it also exists in all subfragments.
@@ -352,51 +361,40 @@ class Fragment:
 
             subfrag._propagate_domains_down()
 
-    def _create_missing_domains(self, missing_domain):
+    def create_missing_domains(self, missing_domain, *, platform=None):
         from .xfrm import DomainCollector
 
+        collector = DomainCollector()
+        collector(self)
+
         new_domains = []
-        for domain_name in DomainCollector()(self):
+        for domain_name in collector.used_domains - collector.defined_domains:
             if domain_name is None:
                 continue
-            if domain_name not in self.domains:
-                value = missing_domain(domain_name)
-                if value is None:
-                    raise DomainError("Domain '{}' is used but not defined".format(domain_name))
-                if type(value) is ClockDomain:
-                    self.add_domains(value)
-                    # And expose ports on the newly added clock domain, since it is added directly
-                    # and there was no chance to add any logic driving it.
-                    new_domains.append(value)
-                else:
-                    new_fragment = Fragment.get(value, platform=None)
-                    if domain_name not in new_fragment.domains:
-                        defined = new_fragment.domains.keys()
-                        raise DomainError(
-                            "Fragment returned by missing domain callback does not define "
-                            "requested domain '{}' (defines {})."
-                            .format(domain_name, ", ".join("'{}'".format(n) for n in defined)))
-                    new_fragment.flatten = True
-                    self.add_subfragment(new_fragment)
-                    self.add_domains(new_fragment.domains.values())
+            value = missing_domain(domain_name)
+            if value is None:
+                raise DomainError("Domain '{}' is used but not defined".format(domain_name))
+            if type(value) is ClockDomain:
+                self.add_domains(value)
+                # And expose ports on the newly added clock domain, since it is added directly
+                # and there was no chance to add any logic driving it.
+                new_domains.append(value)
+            else:
+                new_fragment = Fragment.get(value, platform=platform)
+                if domain_name not in new_fragment.domains:
+                    defined = new_fragment.domains.keys()
+                    raise DomainError(
+                        "Fragment returned by missing domain callback does not define "
+                        "requested domain '{}' (defines {})."
+                        .format(domain_name, ", ".join("'{}'".format(n) for n in defined)))
+                self.add_subfragment(new_fragment, "cd_{}".format(domain_name))
         return new_domains
 
     def _propagate_domains(self, missing_domain):
+        new_domains = self.create_missing_domains(missing_domain)
         self._propagate_domains_up()
-        new_domains = self._create_missing_domains(missing_domain)
         self._propagate_domains_down()
         return new_domains
-
-    def _insert_domain_resets(self):
-        from .xfrm import ResetInserter
-
-        resets = {cd.name: cd.rst for cd in self.domains.values() if cd.rst is not None}
-        return ResetInserter(resets)(self)
-
-    def _lower_domain_signals(self):
-        from .xfrm import DomainLowerer
-
-        return DomainLowerer(self.domains)(self)
 
     def _prepare_use_def_graph(self, parent, level, uses, defs, ios, top):
         def add_uses(*sigs, self=self):
@@ -436,7 +434,9 @@ class Fragment:
             if isinstance(subfrag, Instance):
                 for port_name, (value, dir) in subfrag.named_ports.items():
                     if dir == "i":
-                        subfrag.add_ports(value._rhs_signals(), dir=dir)
+                        # Prioritize defs over uses.
+                        rhs_without_outputs = value._rhs_signals() - subfrag.iter_ports(dir="o")
+                        subfrag.add_ports(rhs_without_outputs, dir=dir)
                         add_uses(value._rhs_signals())
                     if dir == "o":
                         subfrag.add_ports(value._lhs_signals(), dir=dir)
@@ -539,16 +539,16 @@ class Fragment:
                 self.add_ports(sig, dir="i")
 
     def prepare(self, ports=None, missing_domain=lambda name: ClockDomain(name)):
-        from .xfrm import SampleLowerer
+        from .xfrm import SampleLowerer, DomainLowerer
 
         fragment = SampleLowerer()(self)
         new_domains = fragment._propagate_domains(missing_domain)
+        fragment = DomainLowerer()(fragment)
         fragment._resolve_hierarchy_conflicts()
-        fragment = fragment._insert_domain_resets()
-        fragment = fragment._lower_domain_signals()
         if ports is None:
             fragment._propagate_ports(ports=(), all_undef_as_ports=True)
         else:
+            ports = map(DomainLowerer(fragment.domains).on_value, ports)
             new_ports = []
             for cd in new_domains:
                 new_ports.append(cd.clk)
@@ -572,7 +572,7 @@ class Instance(Fragment):
             elif kind == "p":
                 self.parameters[name] = value
             elif kind in ("i", "o", "io"):
-                self.named_ports[name] = (value, kind)
+                self.named_ports[name] = (Value.cast(value), kind)
             else:
                 raise NameError("Instance argument {!r} should be a tuple (kind, name, value) "
                                 "where kind is one of \"p\", \"i\", \"o\", or \"io\""
@@ -584,11 +584,11 @@ class Instance(Fragment):
             elif kw.startswith("p_"):
                 self.parameters[kw[2:]] = arg
             elif kw.startswith("i_"):
-                self.named_ports[kw[2:]] = (arg, "i")
+                self.named_ports[kw[2:]] = (Value.cast(arg), "i")
             elif kw.startswith("o_"):
-                self.named_ports[kw[2:]] = (arg, "o")
+                self.named_ports[kw[2:]] = (Value.cast(arg), "o")
             elif kw.startswith("io_"):
-                self.named_ports[kw[3:]] = (arg, "io")
+                self.named_ports[kw[3:]] = (Value.cast(arg), "io")
             else:
                 raise NameError("Instance keyword argument {}={!r} does not start with one of "
                                 "\"p_\", \"i_\", \"o_\", or \"io_\""

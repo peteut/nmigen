@@ -1,10 +1,15 @@
 import contextlib
 import functools
 import warnings
+import linecache
+import re
 from collections.abc import Iterable
 
+from .utils import log2_int, bits_for
 
-__all__ = ["flatten", "union", "log2_int", "bits_for", "final", "deprecated"]
+
+__all__ = ["flatten", "union", "log2_int", "bits_for", "final", "deprecated",
+           "get_linter_options", "get_linter_option"]
 
 
 def flatten(i):
@@ -22,26 +27,6 @@ def union(i, start=None):
             r = e
         else:
             r |= e
-    return r
-
-
-def log2_int(n, need_pow2=True):
-    if n == 0:
-        return 0
-    r = (n - 1).bit_length()
-    if need_pow2 and (1 << r) != n:
-        raise ValueError("{} is not a power of 2".format(n))
-    return r
-
-
-def bits_for(n, require_sign_bit=False):
-    if n > 0:
-        r = log2_int(n + 1, False)
-    else:
-        require_sign_bit = True
-        r = log2_int(-n, False)
-    if require_sign_bit:
-        r += 1
     return r
 
 
@@ -68,14 +53,16 @@ def _ignore_deprecated(f=None):
         @contextlib.contextmanager
         def context_like():
             with warnings.catch_warnings():
-                warnings.filterwarnings(action="ignore", category=DeprecationWarning)
+                warnings.filterwarnings(action="ignore",
+                                        category=DeprecationWarning)
                 yield
         return context_like()
     else:
         @functools.wraps(f)
         def decorator_like(*args, **kwargs):
             with warnings.catch_warnings():
-                warnings.filterwarnings(action="ignore", category=DeprecationWarning)
+                warnings.filterwarnings(action="ignore",
+                                        category=DeprecationWarning)
                 f(*args, **kwargs)
         return decorator_like
 
@@ -100,3 +87,35 @@ def _dispatchable(method_name: str):
                 return f(that, platform)
         return wrapper
     return decorator
+
+
+def get_linter_options(filename):
+    first_line = linecache.getline(filename, 1)
+    if first_line:
+        match = re.match(
+            r"^#\s*nmigen:\s*((?:\w+=\w+\s*)(?:,\s*\w+=\w+\s*)*)\n$",
+            first_line)
+        if match:
+            return dict(map(
+                lambda s: s.strip().split("=", 2), match.group(1).split(",")))
+    return dict()
+
+
+def get_linter_option(filename, name, type, default):
+    options = get_linter_options(filename)
+    if name not in options:
+        return default
+
+    option = options[name]
+    if type is bool:
+        if option in ("1", "yes", "enable"):
+            return True
+        if option in ("0", "no", "disable"):
+            return False
+        return default
+    if type is int:
+        try:
+            return int(option, 0)
+        except ValueError:
+            return default
+    assert False

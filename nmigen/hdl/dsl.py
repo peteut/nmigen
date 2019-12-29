@@ -1,9 +1,10 @@
 from collections import OrderedDict, namedtuple
 from collections.abc import Iterable
 from contextlib import contextmanager
+from enum import Enum
 import warnings
 
-from ..tools import flatten, bits_for, deprecated
+from .._utils import flatten, bits_for, deprecated
 from .. import tracer
 from .ast import *
 from .ir import *
@@ -27,7 +28,7 @@ class _ModuleBuilderProxy:
         object.__setattr__(self, "_depth", depth)
 
 
-class _ModuleBuilderDomainExplicit(_ModuleBuilderProxy):
+class _ModuleBuilderDomain(_ModuleBuilderProxy):
     def __init__(self, builder, depth, domain):
         super().__init__(builder, depth)
         self._domain = domain
@@ -37,13 +38,18 @@ class _ModuleBuilderDomainExplicit(_ModuleBuilderProxy):
         return self
 
 
-class _ModuleBuilderDomainImplicit(_ModuleBuilderProxy):
+class _ModuleBuilderDomains(_ModuleBuilderProxy):
     def __getattr__(self, name):
+        if name == "submodules":
+            warnings.warn("Using '<module>.d.{}' would add statements to clock domain {!r}; "
+                          "did you mean <module>.{} instead?"
+                          .format(name, name, name),
+                          SyntaxWarning, stacklevel=2)
         if name == "comb":
             domain = None
         else:
             domain = name
-        return _ModuleBuilderDomainExplicit(self._builder, self._depth, domain)
+        return _ModuleBuilderDomain(self._builder, self._depth, domain)
 
     def __getitem__(self, name):
         return self.__getattr__(name)
@@ -51,7 +57,7 @@ class _ModuleBuilderDomainImplicit(_ModuleBuilderProxy):
     def __setattr__(self, name, value):
         if name == "_depth":
             object.__setattr__(self, name, value)
-        elif not isinstance(value, _ModuleBuilderDomainExplicit):
+        elif not isinstance(value, _ModuleBuilderDomain):
             raise AttributeError("Cannot assign 'd.{}' attribute; did you mean 'd.{} +='?"
                                  .format(name, name))
 
@@ -62,7 +68,7 @@ class _ModuleBuilderDomainImplicit(_ModuleBuilderProxy):
 class _ModuleBuilderRoot:
     def __init__(self, builder, depth):
         self._builder = builder
-        self.domain = self.d = _ModuleBuilderDomainImplicit(builder, depth)
+        self.domain = self.d = _ModuleBuilderDomains(builder, depth)
 
     def __getattr__(self, name):
         if name in ("comb", "sync"):
@@ -125,7 +131,7 @@ class Module(_ModuleBuilderRoot, Elaboratable):
         self.submodules    = _ModuleBuilderSubmodules(self)
         self.domains       = _ModuleBuilderDomainSet(self)
 
-        self._statements   = Statement.wrap([])
+        self._statements   = Statement.cast([])
         self._ctrl_context = None
         self._ctrl_stack   = []
 
@@ -166,9 +172,9 @@ class Module(_ModuleBuilderRoot, Elaboratable):
         return data
 
     def _check_signed_cond(self, cond):
-        cond = Value.wrap(cond)
-        bits, sign = cond.shape()
-        if sign:
+        cond = Value.cast(cond)
+        width, signed = cond.shape()
+        if signed:
             warnings.warn("Signed values in If/Elif conditions usually result from inverting "
                           "Python booleans with ~, which leads to unexpected results: ~True is "
                           "-2, which is truthful. Replace `~flag` with `not flag`. (If this is "
@@ -243,7 +249,7 @@ class Module(_ModuleBuilderRoot, Elaboratable):
     def Switch(self, test):
         self._check_context("Switch", context=None)
         switch_data = self._set_ctrl("Switch", {
-            "test":    Value.wrap(test),
+            "test":    Value.cast(test),
             "cases":   OrderedDict(),
             "src_loc": tracer.get_src_loc(src_loc_at=1),
             "case_src_locs": {},
@@ -258,22 +264,30 @@ class Module(_ModuleBuilderRoot, Elaboratable):
         self._pop_ctrl()
 
     @contextmanager
-    def Case(self, *values):
+    def Case(self, *patterns):
         self._check_context("Case", context="Switch")
         src_loc = tracer.get_src_loc(src_loc_at=1)
         switch_data = self._get_ctrl("Switch")
-        new_values = ()
-        for value in values:
-            if isinstance(value, str) and len(value) != len(switch_data["test"]):
-                raise SyntaxError("Case value '{}' must have the same width as test (which is {})"
-                                  .format(value, len(switch_data["test"])))
-            if isinstance(value, int) and bits_for(value) > len(switch_data["test"]):
-                warnings.warn("Case value '{:b}' is wider than test (which has width {}); "
-                              "comparison will never be true"
-                              .format(value, len(switch_data["test"])),
+        new_patterns = ()
+        for pattern in patterns:
+            if not isinstance(pattern, (int, str, Enum)):
+                raise SyntaxError("Case pattern must be an integer, a string, or an enumeration, "
+                                  "not {!r}"
+                                  .format(pattern))
+            if isinstance(pattern, str) and any(bit not in "01-" for bit in pattern):
+                raise SyntaxError("Case pattern '{}' must consist of 0, 1, and - (don't care) bits"
+                                  .format(pattern))
+            if isinstance(pattern, str) and len(pattern) != len(switch_data["test"]):
+                raise SyntaxError("Case pattern '{}' must have the same width as switch value "
+                                  "(which is {})"
+                                  .format(pattern, len(switch_data["test"])))
+            if isinstance(pattern, int) and bits_for(pattern) > len(switch_data["test"]):
+                warnings.warn("Case pattern '{:b}' is wider than switch value "
+                              "(which has width {}); comparison will never be true"
+                              .format(pattern, len(switch_data["test"])),
                               SyntaxWarning, stacklevel=3)
                 continue
-            new_values = (*new_values, value)
+            new_patterns = (*new_patterns, pattern)
         try:
             _outer_case, self._statements = self._statements, []
             self._ctrl_context = None
@@ -282,12 +296,15 @@ class Module(_ModuleBuilderRoot, Elaboratable):
             # If none of the provided cases can possibly be true, omit this branch completely.
             # This needs to be differentiated from no cases being provided in the first place,
             # which means the branch will always match.
-            if not (values and not new_values):
-                switch_data["cases"][new_values] = self._statements
-                switch_data["case_src_locs"][new_values] = src_loc
+            if not (patterns and not new_patterns):
+                switch_data["cases"][new_patterns] = self._statements
+                switch_data["case_src_locs"][new_patterns] = src_loc
         finally:
             self._ctrl_context = "Switch"
             self._statements = _outer_case
+
+    def Default(self):
+        return self.Case()
 
     @contextmanager
     def FSM(self, reset=None, domain="sync", name="fsm"):
@@ -366,7 +383,7 @@ class Module(_ModuleBuilderRoot, Elaboratable):
             tests, cases = [], OrderedDict()
             for if_test, if_case in zip(if_tests + [None], if_bodies):
                 if if_test is not None:
-                    if_test = Value.wrap(if_test)
+                    if_test = Value.cast(if_test)
                     if len(if_test) != 1:
                         if_test = if_test.bool()
                     tests.append(if_test)
@@ -393,7 +410,7 @@ class Module(_ModuleBuilderRoot, Elaboratable):
             fsm_state_src_locs = data["state_src_locs"]
             if not fsm_states:
                 return
-            fsm_signal.nbits = bits_for(len(fsm_encoding) - 1)
+            fsm_signal.width = bits_for(len(fsm_encoding) - 1)
             if fsm_reset is None:
                 fsm_signal.reset = fsm_encoding[next(iter(fsm_states))]
             else:
@@ -416,10 +433,10 @@ class Module(_ModuleBuilderRoot, Elaboratable):
         while len(self._ctrl_stack) > self.domain._depth:
             self._pop_ctrl()
 
-        for assign in Statement.wrap(assigns):
-            if not compat_mode and not isinstance(assign, (Assign, Assert, Assume)):
+        for assign in Statement.cast(assigns):
+            if not compat_mode and not isinstance(assign, (Assign, Assert, Assume, Cover)):
                 raise SyntaxError(
-                    "Only assignments, asserts, and assumes may be appended to d.{}"
+                    "Only assignments and property checks may be appended to d.{}"
                     .format(domain_name(domain)))
 
             assign = SampleDomainInjector(domain)(assign)
@@ -437,7 +454,7 @@ class Module(_ModuleBuilderRoot, Elaboratable):
 
     def _add_submodule(self, submodule, name=None):
         if not hasattr(submodule, "elaborate"):
-            raise TypeError("Trying to add '{!r}', which does not implement .elaborate(), as "
+            raise TypeError("Trying to add {!r}, which does not implement .elaborate(), as "
                             "a submodule".format(submodule))
         if name == None:
             self._anon_submodules.append(submodule)

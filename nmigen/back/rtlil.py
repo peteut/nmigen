@@ -3,18 +3,25 @@ import textwrap
 from collections import defaultdict, OrderedDict
 from contextlib import contextmanager
 
-from ..tools import bits_for, flatten
+from .._utils import bits_for, flatten
 from ..hdl import ast, rec, ir, mem, xfrm
 
 
-__all__ = ["convert"]
+__all__ = ["convert", "convert_fragment"]
 
 
 class _Namer:
     def __init__(self):
         super().__init__()
+        self._anon  = 0
         self._index = 0
         self._names = set()
+
+    def anonymous(self):
+        name = "U$${}".format(self._anon)
+        assert name not in self._names
+        self._anon += 1
+        return name
 
     def _make_name(self, name, local):
         if name is None:
@@ -121,7 +128,10 @@ class _ModuleBuilder(_Namer, _BufferedBuilder, _AttrBuilder):
                 self._append("    parameter \\{} \"{}\"\n",
                              param, value.translate(self._escape_map))
             elif isinstance(value, int):
-                self._append("    parameter \\{} {:d}\n",
+                self._append("    parameter \\{} {}'{:b}\n",
+                             param, bits_for(value), value)
+            elif isinstance(value, float):
+                self._append("    parameter real \\{} \"{!r}\"\n",
                              param, value)
             elif isinstance(value, ast.Const):
                 self._append("    parameter \\{} {}'{:b}\n",
@@ -280,12 +290,12 @@ class _ValueCompilerState:
         else:
             wire_name = signal.name
 
-        wire_curr = self.rtlil.wire(width=signal.nbits, name=wire_name,
+        wire_curr = self.rtlil.wire(width=signal.width, name=wire_name,
                                     port_id=port_id, port_kind=port_kind,
                                     attrs=signal.attrs,
                                     src=src(signal.src_loc))
         if signal in self.driven and self.driven[signal]:
-            wire_next = self.rtlil.wire(width=signal.nbits, name=wire_curr + "$next",
+            wire_next = self.rtlil.wire(width=signal.width, name=wire_curr + "$next",
                                         src=src(signal.src_loc))
         else:
             wire_next = None
@@ -344,16 +354,16 @@ class _ValueCompiler(xfrm.ValueVisitor):
         raise NotImplementedError # :nocov:
 
     def on_Slice(self, value):
-        if value.start == 0 and value.end == len(value.value):
+        if value.start == 0 and value.stop == len(value.value):
             return self(value.value)
 
         sigspec = self._prepare_value_for_Slice(value.value)
-        if value.start == value.end:
+        if value.start == value.stop:
             return "{}"
-        elif value.start + 1 == value.end:
+        elif value.start + 1 == value.stop:
             return "{} [{}]".format(sigspec, value.start)
         else:
-            return "{} [{}:{}]".format(sigspec, value.end - 1, value.start)
+            return "{} [{}:{}]".format(sigspec, value.stop - 1, value.start)
 
     def on_ArrayProxy(self, value):
         index = self.s.expand(value.index)
@@ -372,10 +382,13 @@ class _RHSValueCompiler(_ValueCompiler):
         (1, "~"):    "$not",
         (1, "-"):    "$neg",
         (1, "b"):    "$reduce_bool",
+        (1, "r|"):   "$reduce_or",
+        (1, "r&"):   "$reduce_and",
+        (1, "r^"):   "$reduce_xor",
         (2, "+"):    "$add",
         (2, "-"):    "$sub",
         (2, "*"):    "$mul",
-        (2, "/"):    "$div",
+        (2, "//"):   "$div",
         (2, "%"):    "$mod",
         (2, "**"):   "$pow",
         (2, "<<"):   "$sshl",
@@ -397,10 +410,10 @@ class _RHSValueCompiler(_ValueCompiler):
 
     def on_Const(self, value):
         if isinstance(value.value, str):
-            return "{}'{}".format(value.nbits, value.value)
+            return "{}'{}".format(value.width, value.value)
         else:
-            value_twos_compl = value.value & ((1 << value.nbits) - 1)
-            return "{}'{:0{}b}".format(value.nbits, value_twos_compl, value.nbits)
+            value_twos_compl = value.value & ((1 << value.width) - 1)
+            return "{}'{:0{}b}".format(value.width, value_twos_compl, value.width)
 
     def on_AnyConst(self, value):
         if value in self.s.anys:
@@ -439,7 +452,7 @@ class _RHSValueCompiler(_ValueCompiler):
         arg_bits, arg_sign = arg.shape()
         res_bits, res_sign = value.shape()
         res = self.s.rtlil.wire(width=res_bits, src=src(value.src_loc))
-        self.s.rtlil.cell(self.operator_map[(1, value.op)], ports={
+        self.s.rtlil.cell(self.operator_map[(1, value.operator)], ports={
             "\\A": self(arg),
             "\\Y": res,
         }, params={
@@ -451,7 +464,7 @@ class _RHSValueCompiler(_ValueCompiler):
 
     def match_shape(self, value, new_bits, new_sign):
         if isinstance(value, ast.Const):
-            return self(ast.Const(value.value, (new_bits, new_sign)))
+            return self(ast.Const(value.value, ast.Shape(new_bits, new_sign)))
 
         value_bits, value_sign = value.shape()
         if new_bits <= value_bits:
@@ -472,7 +485,7 @@ class _RHSValueCompiler(_ValueCompiler):
         lhs, rhs = value.operands
         lhs_bits, lhs_sign = lhs.shape()
         rhs_bits, rhs_sign = rhs.shape()
-        if lhs_sign == rhs_sign:
+        if lhs_sign == rhs_sign or value.operator in ("<<", ">>", "**"):
             lhs_wire = self(lhs)
             rhs_wire = self(rhs)
         else:
@@ -482,7 +495,7 @@ class _RHSValueCompiler(_ValueCompiler):
             rhs_wire = self.match_shape(rhs, rhs_bits, rhs_sign)
         res_bits, res_sign = value.shape()
         res = self.s.rtlil.wire(width=res_bits, src=src(value.src_loc))
-        self.s.rtlil.cell(self.operator_map[(2, value.op)], ports={
+        self.s.rtlil.cell(self.operator_map[(2, value.operator)], ports={
             "\\A": lhs_wire,
             "\\B": rhs_wire,
             "\\Y": res,
@@ -493,6 +506,18 @@ class _RHSValueCompiler(_ValueCompiler):
             "B_WIDTH": rhs_bits,
             "Y_WIDTH": res_bits,
         }, src=src(value.src_loc))
+        if value.operator in ("//", "%"):
+            # RTLIL leaves division by zero undefined, but we require it to return zero.
+            divmod_res = res
+            res = self.s.rtlil.wire(width=res_bits, src=src(value.src_loc))
+            self.s.rtlil.cell("$mux", ports={
+                "\\A": divmod_res,
+                "\\B": self(ast.Const(0, ast.Shape(res_bits, res_sign))),
+                "\\S": self(lhs == 0),
+                "\\Y": res,
+            }, params={
+                "WIDTH": res_bits
+            }, src=src(value.src_loc))
         return res
 
     def on_Operator_mux(self, value):
@@ -520,7 +545,7 @@ class _RHSValueCompiler(_ValueCompiler):
         elif len(value.operands) == 2:
             return self.on_Operator_binary(value)
         elif len(value.operands) == 3:
-            assert value.op == "m"
+            assert value.operator == "m"
             return self.on_Operator_mux(value)
         else:
             raise TypeError # :nocov:
@@ -598,9 +623,20 @@ class _LHSValueCompiler(_ValueCompiler):
     def on_Part(self, value):
         offset = self.s.expand(value.offset)
         if isinstance(offset, ast.Const):
-            return self(ast.Slice(value.value, offset.value, offset.value + value.width))
+            if offset.value == len(value.value):
+                dummy_wire = self.s.rtlil.wire(value.width)
+                return dummy_wire
+            return self(ast.Slice(value.value,
+                                  offset.value * value.stride,
+                                  offset.value * value.stride + value.width))
         else:
-            raise LegalizeValue(value.offset, range((1 << len(value.offset))), value.src_loc)
+            # Only so many possible parts. The amount of branches is exponential; if value.offset
+            # is large (e.g. 32-bit wide), trying to naively legalize it is likely to exhaust
+            # system resources.
+            max_branches = len(value.value) // value.stride + 1
+            raise LegalizeValue(value.offset,
+                                range((1 << len(value.offset)) // value.stride)[:max_branches],
+                                value.src_loc)
 
     def on_Repl(self, value):
         raise TypeError # :nocov:
@@ -651,34 +687,35 @@ class _StatementCompiler(xfrm.StatementVisitor):
         else:
             self._case.assign(self.lhs_compiler(stmt.lhs), rhs_sigspec)
 
-    def on_Assert(self, stmt):
+    def on_property(self, stmt):
         self(stmt._check.eq(stmt.test))
         self(stmt._en.eq(1))
 
         en_wire = self.rhs_compiler(stmt._en)
         check_wire = self.rhs_compiler(stmt._check)
-        self.state.rtlil.cell("$assert", ports={
+        self.state.rtlil.cell("$" + stmt._kind, ports={
             "\\A": check_wire,
             "\\EN": en_wire,
         }, src=src(stmt.src_loc))
 
-    def on_Assume(self, stmt):
-        self(stmt._check.eq(stmt.test))
-        self(stmt._en.eq(1))
-
-        en_wire = self.rhs_compiler(stmt._en)
-        check_wire = self.rhs_compiler(stmt._check)
-        self.state.rtlil.cell("$assume", ports={
-            "\\A": check_wire,
-            "\\EN": en_wire,
-        }, src=src(stmt.src_loc))
+    on_Assert = on_property
+    on_Assume = on_property
+    on_Cover  = on_property
 
     def on_Switch(self, stmt):
         self._check_rhs(stmt.test)
 
-        if stmt not in self._test_cache:
-            self._test_cache[stmt] = self.rhs_compiler(stmt.test)
-        test_sigspec = self._test_cache[stmt]
+        if not self.state.expansions:
+            # We repeatedly translate the same switches over and over (see the LHSGroupAnalyzer
+            # related code below), and translating the switch test only once helps readability.
+            if stmt not in self._test_cache:
+                self._test_cache[stmt] = self.rhs_compiler(stmt.test)
+            test_sigspec = self._test_cache[stmt]
+        else:
+            # However, if the switch test contains an illegal value, then it may not be cached
+            # (since the illegal value will be repeatedly replaced with different constants), so
+            # don't cache anything in that case.
+            test_sigspec = self.rhs_compiler(stmt.test)
 
         with self._case.switch(test_sigspec, src=src(stmt.src_loc)) as switch:
             for values, stmts in stmt.cases.items():
@@ -704,15 +741,16 @@ class _StatementCompiler(xfrm.StatementVisitor):
         except LegalizeValue as legalize:
             with self._case.switch(self.rhs_compiler(legalize.value),
                                    src=src(legalize.src_loc)) as switch:
-                bits, sign = legalize.value.shape()
-                tests = ["{:0{}b}".format(v, bits) for v in legalize.branches]
-                tests[-1] = "-" * bits
+                shape = legalize.value.shape()
+                tests = ["{:0{}b}".format(v, shape.width) for v in legalize.branches]
+                if tests:
+                    tests[-1] = "-" * shape.width
                 for branch, test in zip(legalize.branches, tests):
                     with self.case(switch, (test,)):
                         self._wrap_assign = False
-                        branch_value = ast.Const(branch, (bits, sign))
+                        branch_value = ast.Const(branch, shape)
                         with self.state.expand_to(legalize.value, branch_value):
-                            super().on_statement(stmt)
+                            self.on_statement(stmt)
             self._wrap_assign = True
 
     def on_statements(self, stmts):
@@ -720,7 +758,7 @@ class _StatementCompiler(xfrm.StatementVisitor):
             self.on_statement(stmt)
 
 
-def convert_fragment(builder, fragment, hierarchy):
+def _convert_fragment(builder, fragment, name_map, hierarchy):
     if isinstance(fragment, ir.Instance):
         port_map = OrderedDict()
         for port_name, (value, dir) in fragment.named_ports.items():
@@ -773,6 +811,9 @@ def convert_fragment(builder, fragment, hierarchy):
             if not subfragment.ports:
                 continue
 
+            if sub_name is None:
+                sub_name = module.anonymous()
+
             sub_params = OrderedDict()
             if hasattr(subfragment, "parameters"):
                 for param_name, param_value in subfragment.parameters.items():
@@ -807,7 +848,8 @@ def convert_fragment(builder, fragment, hierarchy):
                     sub_params[param_name] = param_value
 
             sub_type, sub_port_map = \
-                convert_fragment(builder, subfragment, hierarchy=hierarchy + (sub_name,))
+                _convert_fragment(builder, subfragment, name_map,
+                                  hierarchy=hierarchy + (sub_name,))
 
             sub_ports = OrderedDict()
             for port, value in sub_port_map.items():
@@ -842,7 +884,7 @@ def convert_fragment(builder, fragment, hierarchy):
                         if signal not in group_signals:
                             continue
                         if domain is None:
-                            prev_value = ast.Const(signal.reset, signal.nbits)
+                            prev_value = ast.Const(signal.reset, signal.width)
                         else:
                             prev_value = signal
                         case.assign(lhs_compiler(signal), rhs_compiler(prev_value))
@@ -858,6 +900,14 @@ def convert_fragment(builder, fragment, hierarchy):
                     # by looking for any signals on RHS. If there aren't any, we add some logic
                     # whose only purpose is to trigger Verilog simulators when it converts
                     # through RTLIL and to Verilog, by populating the sensitivity list.
+                    #
+                    # Unfortunately, while this workaround allows true (event-driven) Verilog
+                    # simulators to work properly, and is universally ignored by synthesizers,
+                    # Verilator rejects it.
+                    #
+                    # Running the Yosys proc_prune pass converts such pathological `always @*`
+                    # blocks to `assign` statements, so this workaround can be removed completely
+                    # once support for Yosys 0.9 is dropped.
                     if not stmt_compiler._has_rhs:
                         if verilog_trigger is None:
                             verilog_trigger = \
@@ -871,7 +921,7 @@ def convert_fragment(builder, fragment, hierarchy):
                         if signal not in group_signals:
                             continue
                         wire_curr, wire_next = compiler_state.resolve(signal)
-                        sync.update(wire_curr, rhs_compiler(ast.Const(signal.reset, signal.nbits)))
+                        sync.update(wire_curr, rhs_compiler(ast.Const(signal.reset, signal.width)))
 
                     # The Verilog simulator trigger needs to change at time 0, so if we haven't
                     # yet done that in some process, do it.
@@ -881,8 +931,8 @@ def convert_fragment(builder, fragment, hierarchy):
 
                 # For every signal in every sync domain, assign \sig to \sig$next. The sensitivity
                 # list, however, differs between domains: for domains with sync reset, it is
-                # `posedge clk`, for sync domains with async reset it is `posedge clk or
-                # posedge rst`.
+                # `[pos|neg]edge clk`, for sync domains with async reset it is `[pos|neg]edge clk
+                # or posedge rst`.
                 for domain, signals in fragment.drivers.items():
                     if domain is None:
                         continue
@@ -894,7 +944,7 @@ def convert_fragment(builder, fragment, hierarchy):
                     cd = fragment.domains[domain]
 
                     triggers = []
-                    triggers.append(("posedge", compiler_state.resolve_curr(cd.clk)))
+                    triggers.append((cd.clk_edge + "edge", compiler_state.resolve_curr(cd.clk)))
                     if cd.async_reset:
                         triggers.append(("posedge", compiler_state.resolve_curr(cd.rst)))
 
@@ -926,20 +976,35 @@ def convert_fragment(builder, fragment, hierarchy):
             if wire in driven:
                 continue
             wire_curr, _ = compiler_state.wires[wire]
-            module.connect(wire_curr, rhs_compiler(ast.Const(wire.reset, wire.nbits)))
+            module.connect(wire_curr, rhs_compiler(ast.Const(wire.reset, wire.width)))
 
-    # Finally, collect the names we've given to our ports in RTLIL, and correlate these with
-    # the signals represented by these ports. If we are a submodule, this will be necessary
-    # to create a cell for us in the parent module.
+    # Collect the names we've given to our ports in RTLIL, and correlate these with the signals
+    # represented by these ports. If we are a submodule, this will be necessary to create a cell
+    # for us in the parent module.
     port_map = OrderedDict()
     for signal in fragment.ports:
         port_map[compiler_state.resolve_curr(signal)] = signal
 
+    # Finally, collect tha names we've given to each wire in RTLIL, and provide these to
+    # the caller, to allow manipulating them in the toolchain.
+    for signal in compiler_state.wires:
+        wire_name = compiler_state.resolve_curr(signal)
+        if wire_name.startswith("\\"):
+            wire_name = wire_name[1:]
+        name_map[signal] = hierarchy + (wire_name,)
+
     return module.name, port_map
 
 
-def convert(fragment, name="top", platform=None, **kwargs):
-    fragment = ir.Fragment.get(fragment, platform).prepare(**kwargs)
+def convert_fragment(fragment, name="top"):
+    assert isinstance(fragment, ir.Fragment)
     builder = _Builder()
-    convert_fragment(builder, fragment, hierarchy=(name,))
-    return str(builder)
+    name_map = ast.SignalDict()
+    _convert_fragment(builder, fragment, name_map, hierarchy=(name,))
+    return str(builder), name_map
+
+
+def convert(elaboratable, name="top", platform=None, **kwargs):
+    fragment = ir.Fragment.get(elaboratable, platform).prepare(**kwargs)
+    il_text, name_map = convert_fragment(fragment, name)
+    return il_text

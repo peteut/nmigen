@@ -6,7 +6,7 @@ __all__ = ["Pins", "PinsN", "DiffPairs", "DiffPairsN",
 
 
 class Pins:
-    def __init__(self, names, *, dir="io", conn=None, assert_width=None):
+    def __init__(self, names, *, dir="io", invert=False, conn=None, assert_width=None):
         if not isinstance(names, str):
             raise TypeError("Names must be a whitespace-separated string, not {!r}"
                             .format(names))
@@ -29,7 +29,7 @@ class Pins:
 
         self.names  = names
         self.dir    = dir
-        self.invert = False
+        self.invert = bool(invert)
 
     def __len__(self):
         return len(self.names)
@@ -92,8 +92,9 @@ def DiffPairsN(*args, **kwargs):
 class Attrs(OrderedDict):
     def __init__(self, **attrs):
         for key, value in attrs.items():
-            if not (value is None or isinstance(value, str) or hasattr(value, "__call__")):
-                raise TypeError("Value of attribute {} must be None, str, or callable, not {!r}"
+            if not (value is None or isinstance(value, (str, int)) or hasattr(value, "__call__")):
+                raise TypeError("Value of attribute {} must be None, int, str, or callable, "
+                                "not {!r}"
                                 .format(key, value))
 
         super().__init__(**attrs)
@@ -103,10 +104,8 @@ class Attrs(OrderedDict):
         for key, value in self.items():
             if value is None:
                 items.append("!" + key)
-            elif hasattr(value, "__call__"):
-                items.append(key + "=" + repr(value))
             else:
-                items.append(key + "=" + value)
+                items.append(key + "=" + repr(value))
         return "(attrs {})".format(" ".join(items))
 
 
@@ -210,10 +209,10 @@ class Resource(Subsignal):
 
 
 class Connector:
-    def __init__(self, name, number, io):
+    def __init__(self, name, number, io, *, conn=None):
         self.name    = name
         self.number  = number
-        self.mapping = OrderedDict()
+        mapping = OrderedDict()
 
         if isinstance(io, dict):
             for conn_pin, plat_pin in io.items():
@@ -223,17 +222,28 @@ class Connector:
                 if not isinstance(plat_pin, str):
                     raise TypeError("Platform pin name must be a string, not {!r}"
                                     .format(plat_pin))
-                self.mapping[conn_pin] = plat_pin
+                mapping[conn_pin] = plat_pin
 
         elif isinstance(io, str):
             for conn_pin, plat_pin in enumerate(io.split(), start=1):
                 if plat_pin == "-":
                     continue
-                self.mapping[str(conn_pin)] = plat_pin
 
+                mapping[str(conn_pin)] = plat_pin
         else:
             raise TypeError("Connector I/Os must be a dictionary or a string, not {!r}"
                             .format(io))
+
+        if conn is not None:
+            conn_name, conn_number = conn
+            if not (isinstance(conn_name, str) and isinstance(conn_number, int)):
+                raise TypeError("Connector must be None or a pair of string and integer, not {!r}"
+                                .format(conn))
+
+            for conn_pin, plat_pin in mapping.items():
+                mapping[conn_pin] = "{}_{}:{}".format(conn_name, conn_number, plat_pin)
+
+        self.mapping = mapping
 
     def __repr__(self):
         return "(connector {} {} {})".format(self.name, self.number,

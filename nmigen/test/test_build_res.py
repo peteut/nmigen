@@ -1,9 +1,11 @@
+# nmigen: UnusedElaboratable=no
+
 from .. import *
 from ..hdl.rec import *
 from ..lib.io import *
 from ..build.dsl import *
 from ..build.res import *
-from .tools import *
+from .utils import *
 
 
 class ResourceManagerTestCase(FHDLTestCase):
@@ -81,7 +83,7 @@ class ResourceManagerTestCase(FHDLTestCase):
         self.assertEqual(len(ports), 2)
         scl, sda = ports
         self.assertEqual(ports[1].name, "i2c_0__sda__io")
-        self.assertEqual(ports[1].nbits, 1)
+        self.assertEqual(ports[1].width, 1)
 
         self.assertEqual(list(self.cm.iter_single_ended_pins()), [
             (i2c.scl, scl, {}, False),
@@ -102,9 +104,9 @@ class ResourceManagerTestCase(FHDLTestCase):
         self.assertEqual(len(ports), 2)
         p, n = ports
         self.assertEqual(p.name, "clk100_0__p")
-        self.assertEqual(p.nbits, clk100.width)
+        self.assertEqual(p.width, clk100.width)
         self.assertEqual(n.name, "clk100_0__n")
-        self.assertEqual(n.nbits, clk100.width)
+        self.assertEqual(n.width, clk100.width)
 
         self.assertEqual(list(self.cm.iter_differential_pins()), [
             (clk100, p, n, {}, False),
@@ -168,28 +170,42 @@ class ResourceManagerTestCase(FHDLTestCase):
             ("spi_0__mosi__io", ["B3"], {}),
         ])
 
+    def test_request_via_nested_connector(self):
+        new_connectors = [
+            Connector("pmod_extension", 0, "1 2 3 4 - -", conn=("pmod", 0)),
+        ]
+        self.cm.add_connectors(new_connectors)
+        self.cm.add_resources([
+            Resource("spi", 0,
+                Subsignal("ss",   Pins("1", conn=("pmod_extension", 0))),
+                Subsignal("clk",  Pins("2", conn=("pmod_extension", 0))),
+                Subsignal("miso", Pins("3", conn=("pmod_extension", 0))),
+                Subsignal("mosi", Pins("4", conn=("pmod_extension", 0))),
+            )
+        ])
+        spi0 = self.cm.request("spi", 0)
+        self.assertEqual(list(self.cm.iter_port_constraints()), [
+            ("spi_0__ss__io",   ["B0"], {}),
+            ("spi_0__clk__io",  ["B1"], {}),
+            ("spi_0__miso__io", ["B2"], {}),
+            ("spi_0__mosi__io", ["B3"], {}),
+        ])
+
     def test_request_clock(self):
         clk100 = self.cm.request("clk100", 0)
         clk50 = self.cm.request("clk50", 0, dir="i")
         clk100_port_p, clk100_port_n, clk50_port = self.cm.iter_ports()
         self.assertEqual(list(self.cm.iter_clock_constraints()), [
-            (clk100_port_p, 100e6),
-            (clk50_port, 50e6)
+            (clk100.i, 100e6),
+            (clk50.i, 50e6)
         ])
 
     def test_add_clock(self):
         i2c = self.cm.request("i2c")
-        self.cm.add_clock_constraint(i2c.scl, 100e3)
-        scl_port, sda_port = self.cm.iter_ports()
+        self.cm.add_clock_constraint(i2c.scl.o, 100e3)
         self.assertEqual(list(self.cm.iter_clock_constraints()), [
-            (scl_port, 100e3)
+            (i2c.scl.o, 100e3)
         ])
-
-    def test_get_clock(self):
-        clk100 = self.cm.request("clk100", 0)
-        self.assertEqual(self.cm.get_clock_constraint(clk100), 100e6)
-        with self.assertRaises(KeyError):
-            self.cm.get_clock_constraint(Signal())
 
     def test_wrong_resources(self):
         with self.assertRaises(TypeError, msg="Object 'wrong' is not a Resource"):
@@ -218,19 +234,13 @@ class ResourceManagerTestCase(FHDLTestCase):
 
     def test_wrong_clock_signal(self):
         with self.assertRaises(TypeError,
-                msg="Object None is not a Signal or Pin"):
+                msg="Object None is not a Signal"):
             self.cm.add_clock_constraint(None, 10e6)
 
     def test_wrong_clock_frequency(self):
         with self.assertRaises(TypeError,
                 msg="Frequency must be a number, not None"):
             self.cm.add_clock_constraint(Signal(), None)
-
-    def test_wrong_clock_pin(self):
-        with self.assertRaises(ValueError,
-                msg="The Pin object (rec <unnamed> i), which is not a previously requested "
-                    "resource, cannot be used to desigate a clock"):
-            self.cm.add_clock_constraint(Pin(1, dir="i"), 1e6)
 
     def test_wrong_request_duplicate(self):
         with self.assertRaises(ResourceError,
@@ -283,6 +293,6 @@ class ResourceManagerTestCase(FHDLTestCase):
     def test_wrong_clock_constraint_twice(self):
         clk100 = self.cm.request("clk100")
         with self.assertRaises(ValueError,
-                msg="Cannot add clock constraint on (sig clk100_0__p), which is already "
+                msg="Cannot add clock constraint on (sig clk100_0__i), which is already "
                     "constrained to 100000000.0 Hz"):
-            self.cm.add_clock_constraint(clk100, 1e6)
+            self.cm.add_clock_constraint(clk100.i, 1e6)

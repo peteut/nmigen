@@ -1,6 +1,21 @@
-from ._version import get_versions
-__version__ = get_versions()['version']
-del get_versions
+import pkg_resources
+try:
+    __version__ = pkg_resources.get_distribution(__name__).version
+except pkg_resources.DistributionNotFound:
+    pass
+
 
 from .hdl import *
-from .lib import *
+
+
+__all__ = [
+    "Shape", "unsigned", "signed",
+    "Value", "Const", "C", "Mux", "Cat", "Repl", "Array", "Signal", "ClockSignal", "ResetSignal",
+    "Module",
+    "ClockDomain",
+    "Elaboratable", "Fragment", "Instance",
+    "Memory",
+    "Record",
+    "DomainRenamer", "ResetInserter", "EnableInserter",
+    "CEInserter", # TODO(nmigen-0.2): remove this
+]

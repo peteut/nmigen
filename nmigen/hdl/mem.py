@@ -9,12 +9,12 @@ __all__ = ["Memory", "ReadPort", "WritePort", "DummyPort"]
 
 
 class Memory:
-    def __init__(self, width, depth, init=None, name=None, simulate=True):
+    def __init__(self, *, width, depth, init=None, name=None, simulate=True):
         if not isinstance(width, int) or width < 0:
-            raise TypeError("Memory width must be a non-negative integer, not '{!r}'"
+            raise TypeError("Memory width must be a non-negative integer, not {!r}"
                             .format(width))
         if not isinstance(depth, int) or depth < 0:
-            raise TypeError("Memory depth must be a non-negative integer, not '{!r}'"
+            raise TypeError("Memory depth must be a non-negative integer, not {!r}"
                             .format(depth))
 
         self.name    = name or tracer.get_var_name(depth=2, default="$memory")
@@ -53,24 +53,11 @@ class Memory:
             raise TypeError("Memory initialization value at address {:x}: {}"
                             .format(addr, e)) from None
 
-    def read_port(self, domain="sync", transparent=True):
-        if domain == "comb" and not transparent:
-            raise ValueError("Read port cannot be simultaneously asynchronous and non-transparent")
-        return ReadPort(self, domain, transparent)
+    def read_port(self, *, src_loc_at=0, **kwargs):
+        return ReadPort(self, src_loc_at=1 + src_loc_at, **kwargs)
 
-    def write_port(self, domain="sync", priority=0, granularity=None):
-        if granularity is None:
-            granularity = self.width
-        if not isinstance(granularity, int) or granularity < 0:
-            raise TypeError("Write port granularity must be a non-negative integer, not '{!r}'"
-                            .format(granularity))
-        if granularity > self.width:
-            raise ValueError("Write port granularity must not be greater than memory width "
-                             "({} > {})"
-                             .format(granularity, self.width))
-        if self.width // granularity * granularity != self.width:
-            raise ValueError("Write port granularity must divide memory width evenly")
-        return WritePort(self, domain, priority, granularity)
+    def write_port(self, *, src_loc_at=0, **kwargs):
+        return WritePort(self, src_loc_at=1 + src_loc_at, **kwargs)
 
     def __getitem__(self, index):
         """Simulation only."""
@@ -78,25 +65,29 @@ class Memory:
 
 
 class ReadPort(Elaboratable):
-    def __init__(self, memory, domain, transparent):
+    def __init__(self, memory, *, domain="sync", transparent=True, src_loc_at=0):
+        if domain == "comb" and not transparent:
+            raise ValueError("Read port cannot be simultaneously asynchronous and non-transparent")
+
         self.memory      = memory
         self.domain      = domain
         self.transparent = transparent
 
-        self.addr = Signal(max=memory.depth,
-                           name="{}_r_addr".format(memory.name), src_loc_at=2)
+        self.addr = Signal(range(memory.depth),
+                           name="{}_r_addr".format(memory.name), src_loc_at=1 + src_loc_at)
         self.data = Signal(memory.width,
-                           name="{}_r_data".format(memory.name), src_loc_at=2)
+                           name="{}_r_data".format(memory.name), src_loc_at=1 + src_loc_at)
         if self.domain != "comb" and not transparent:
-            self.en = Signal(name="{}_r_en".format(memory.name), src_loc_at=2)
+            self.en = Signal(name="{}_r_en".format(memory.name), reset=1,
+                             src_loc_at=2 + src_loc_at)
         else:
             self.en = Const(1)
 
     def elaborate(self, platform):
         f = Instance("$memrd",
             p_MEMID=self.memory,
-            p_ABITS=self.addr.nbits,
-            p_WIDTH=self.data.nbits,
+            p_ABITS=self.addr.width,
+            p_WIDTH=self.data.width,
             p_CLK_ENABLE=self.domain != "comb",
             p_CLK_POLARITY=1,
             p_TRANSPARENT=self.transparent,
@@ -142,27 +133,38 @@ class ReadPort(Elaboratable):
 
 
 class WritePort(Elaboratable):
-    def __init__(self, memory, domain, priority, granularity):
+    def __init__(self, memory, *, domain="sync", granularity=None, src_loc_at=0):
+        if granularity is None:
+            granularity = memory.width
+        if not isinstance(granularity, int) or granularity < 0:
+            raise TypeError("Write port granularity must be a non-negative integer, not {!r}"
+                            .format(granularity))
+        if granularity > memory.width:
+            raise ValueError("Write port granularity must not be greater than memory width "
+                             "({} > {})"
+                             .format(granularity, memory.width))
+        if memory.width // granularity * granularity != memory.width:
+            raise ValueError("Write port granularity must divide memory width evenly")
+
         self.memory       = memory
         self.domain       = domain
-        self.priority     = priority
         self.granularity  = granularity
 
-        self.addr = Signal(max=memory.depth,
-                           name="{}_w_addr".format(memory.name), src_loc_at=2)
+        self.addr = Signal(range(memory.depth),
+                           name="{}_w_addr".format(memory.name), src_loc_at=1 + src_loc_at)
         self.data = Signal(memory.width,
-                           name="{}_w_data".format(memory.name), src_loc_at=2)
+                           name="{}_w_data".format(memory.name), src_loc_at=1 + src_loc_at)
         self.en   = Signal(memory.width // granularity,
-                           name="{}_w_en".format(memory.name), src_loc_at=2)
+                           name="{}_w_en".format(memory.name), src_loc_at=1 + src_loc_at)
 
     def elaborate(self, platform):
         f = Instance("$memwr",
             p_MEMID=self.memory,
-            p_ABITS=self.addr.nbits,
-            p_WIDTH=self.data.nbits,
+            p_ABITS=self.addr.width,
+            p_WIDTH=self.data.width,
             p_CLK_ENABLE=1,
             p_CLK_POLARITY=1,
-            p_PRIORITY=self.priority,
+            p_PRIORITY=0,
             i_CLK=ClockSignal(self.domain),
             i_EN=Cat(Repl(en_bit, self.granularity) for en_bit in self.en),
             i_ADDR=self.addr,
@@ -189,17 +191,17 @@ class DummyPort:
     It does not include any read/write port specific attributes, i.e. none besides ``"domain"``;
     any such attributes may be set manually.
     """
-    def __init__(self, width, addr_bits, domain="sync", name=None, granularity=None):
+    def __init__(self, *, data_width, addr_width, domain="sync", name=None, granularity=None):
         self.domain = domain
 
         if granularity is None:
-            granularity = width
+            granularity = data_width
         if name is None:
             name = tracer.get_var_name(depth=2, default="dummy")
 
-        self.addr = Signal(addr_bits,
+        self.addr = Signal(addr_width,
                            name="{}_addr".format(name), src_loc_at=1)
-        self.data = Signal(width,
+        self.data = Signal(data_width,
                            name="{}_data".format(name), src_loc_at=1)
-        self.en   = Signal(width // granularity,
+        self.en   = Signal(data_width // granularity,
                            name="{}_en".format(name), src_loc_at=1)

@@ -1,9 +1,12 @@
+# nmigen: UnusedElaboratable=no
+
 from collections import OrderedDict
+from enum import Enum
 
 from ..hdl.ast import *
 from ..hdl.cd import *
 from ..hdl.dsl import *
-from .tools import *
+from .utils import *
 
 
 class DSLTestCase(FHDLTestCase):
@@ -74,7 +77,7 @@ class DSLTestCase(FHDLTestCase):
     def test_d_asgn_wrong(self):
         m = Module()
         with self.assertRaises(SyntaxError,
-                msg="Only assignments, asserts, and assumes may be appended to d.sync"):
+                msg="Only assignments and property checks may be appended to d.sync"):
             m.d.sync += Switch(self.s1, {})
 
     def test_comb_wrong(self):
@@ -94,6 +97,13 @@ class DSLTestCase(FHDLTestCase):
         with self.assertRaises(AttributeError,
                 msg="'Module' object has no attribute 'nonexistentattr'"):
             m.nonexistentattr
+
+    def test_d_suspicious(self):
+        m = Module()
+        with self.assertWarns(SyntaxWarning,
+                msg="Using '<module>.d.submodules' would add statements to clock domain "
+                    "'submodules'; did you mean <module>.submodules instead?"):
+            m.d.submodules += []
 
     def test_clock_signal(self):
         m = Module()
@@ -307,12 +317,29 @@ class DSLTestCase(FHDLTestCase):
         )
         """)
 
-    def test_Switch_default(self):
+    def test_Switch_default_Case(self):
         m = Module()
         with m.Switch(self.w1):
             with m.Case(3):
                 m.d.comb += self.c1.eq(1)
             with m.Case():
+                m.d.comb += self.c2.eq(1)
+        m._flush()
+        self.assertRepr(m._statements, """
+        (
+            (switch (sig w1)
+                (case 0011 (eq (sig c1) (const 1'd1)))
+                (default (eq (sig c2) (const 1'd1)))
+            )
+        )
+        """)
+
+    def test_Switch_default_Default(self):
+        m = Module()
+        with m.Switch(self.w1):
+            with m.Case(3):
+                m.d.comb += self.c1.eq(1)
+            with m.Default():
                 m.d.comb += self.c2.eq(1)
         m._flush()
         self.assertRepr(m._statements, """
@@ -338,16 +365,33 @@ class DSLTestCase(FHDLTestCase):
         )
         """)
 
+    def test_Switch_enum(self):
+        class Color(Enum):
+            RED  = 1
+            BLUE = 2
+        m = Module()
+        se = Signal(Color)
+        with m.Switch(se):
+            with m.Case(Color.RED):
+                m.d.comb += self.c1.eq(1)
+        self.assertRepr(m._statements, """
+        (
+            (switch (sig se)
+                (case 01 (eq (sig c1) (const 1'd1)))
+            )
+        )
+        """)
+
     def test_Case_width_wrong(self):
         m = Module()
         with m.Switch(self.w1):
             with self.assertRaises(SyntaxError,
-                    msg="Case value '--' must have the same width as test (which is 4)"):
+                    msg="Case pattern '--' must have the same width as switch value (which is 4)"):
                 with m.Case("--"):
                     pass
             with self.assertWarns(SyntaxWarning,
-                    msg="Case value '10110' is wider than test (which has width 4); comparison "
-                        "will never be true"):
+                    msg="Case pattern '10110' is wider than switch value (which has width 4); "
+                        "comparison will never be true"):
                 with m.Case(0b10110):
                     pass
         self.assertRepr(m._statements, """
@@ -355,6 +399,22 @@ class DSLTestCase(FHDLTestCase):
             (switch (sig w1) )
         )
         """)
+
+    def test_Case_bits_wrong(self):
+        m = Module()
+        with m.Switch(self.w1):
+            with self.assertRaises(SyntaxError,
+                    msg="Case pattern 'abc' must consist of 0, 1, and - (don't care) bits"):
+                with m.Case("abc"):
+                    pass
+
+    def test_Case_pattern_wrong(self):
+        m = Module()
+        with m.Switch(self.w1):
+            with self.assertRaises(SyntaxError,
+                    msg="Case pattern must be an integer, a string, or an enumeration, not 1.0"):
+                with m.Case(1.0):
+                    pass
 
     def test_Case_outside_Switch_wrong(self):
         m = Module()
@@ -567,10 +627,10 @@ class DSLTestCase(FHDLTestCase):
     def test_submodule_wrong(self):
         m = Module()
         with self.assertRaises(TypeError,
-                msg="Trying to add '1', which does not implement .elaborate(), as a submodule"):
+                msg="Trying to add 1, which does not implement .elaborate(), as a submodule"):
             m.submodules.foo = 1
         with self.assertRaises(TypeError,
-                msg="Trying to add '1', which does not implement .elaborate(), as a submodule"):
+                msg="Trying to add 1, which does not implement .elaborate(), as a submodule"):
             m.submodules += 1
 
     def test_submodule_named_conflict(self):

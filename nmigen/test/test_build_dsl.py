@@ -1,7 +1,7 @@
 from collections import OrderedDict
 
 from ..build.dsl import *
-from .tools import *
+from .utils import *
 
 
 class PinsTestCase(FHDLTestCase):
@@ -16,6 +16,10 @@ class PinsTestCase(FHDLTestCase):
     def test_invert(self):
         p = PinsN("A0")
         self.assertEqual(repr(p), "(pins-n io A0)")
+        self.assertEqual(p.invert, True)
+
+    def test_invert_arg(self):
+        p = Pins("A0", invert=True)
         self.assertEqual(p.invert, True)
 
     def test_conn(self):
@@ -109,9 +113,9 @@ class DiffPairsTestCase(FHDLTestCase):
 
 class AttrsTestCase(FHDLTestCase):
     def test_basic(self):
-        a = Attrs(IO_STANDARD="LVCMOS33", PULLUP="1")
+        a = Attrs(IO_STANDARD="LVCMOS33", PULLUP=1)
         self.assertEqual(a["IO_STANDARD"], "LVCMOS33")
-        self.assertEqual(repr(a), "(attrs IO_STANDARD=LVCMOS33 PULLUP=1)")
+        self.assertEqual(repr(a), "(attrs IO_STANDARD='LVCMOS33' PULLUP=1)")
 
     def test_remove(self):
         a = Attrs(FOO=None)
@@ -126,8 +130,8 @@ class AttrsTestCase(FHDLTestCase):
 
     def test_wrong_value(self):
         with self.assertRaises(TypeError,
-                msg="Value of attribute FOO must be None, str, or callable, not 1"):
-            a = Attrs(FOO=1)
+                msg="Value of attribute FOO must be None, int, str, or callable, not 1.0"):
+            a = Attrs(FOO=1.0)
 
 
 class ClockTestCase(FHDLTestCase):
@@ -142,7 +146,7 @@ class SubsignalTestCase(FHDLTestCase):
     def test_basic_pins(self):
         s = Subsignal("a", Pins("A0"), Attrs(IOSTANDARD="LVCMOS33"))
         self.assertEqual(repr(s),
-            "(subsignal a (pins io A0) (attrs IOSTANDARD=LVCMOS33))")
+            "(subsignal a (pins io A0) (attrs IOSTANDARD='LVCMOS33'))")
 
     def test_basic_diffpairs(self):
         s = Subsignal("a", DiffPairs("A0", "B0"))
@@ -223,7 +227,7 @@ class ResourceTestCase(FHDLTestCase):
         self.assertEqual(repr(r), "(resource serial 0"
                                   " (subsignal tx (pins o A0))"
                                   " (subsignal rx (pins i A1))"
-                                  " (attrs IOSTANDARD=LVCMOS33))")
+                                  " (attrs IOSTANDARD='LVCMOS33'))")
 
     def test_family(self):
         ios = [Subsignal("clk", Pins("A0", dir="o"))]
@@ -276,6 +280,19 @@ class ConnectorTestCase(FHDLTestCase):
         self.assertEqual(c.mapping, OrderedDict([
             ("DP0", "A0"),
             ("DP1", "A1"),
+        ]))
+
+    def test_conn(self):
+        c = Connector("pmod", 0, "0 1 2 3 - - 4 5 6 7 - -", conn=("expansion", 0))
+        self.assertEqual(c.mapping, OrderedDict([
+            ("1", "expansion_0:0"),
+            ("2", "expansion_0:1"),
+            ("3", "expansion_0:2"),
+            ("4", "expansion_0:3"),
+            ("7", "expansion_0:4"),
+            ("8", "expansion_0:5"),
+            ("9", "expansion_0:6"),
+            ("10", "expansion_0:7"),
         ]))
 
     def test_wrong_io(self):
