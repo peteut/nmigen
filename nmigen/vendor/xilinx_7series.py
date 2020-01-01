@@ -394,16 +394,8 @@ class Xilinx7SeriesPlatform(TemplatedPlatform):
                 "allowed values for stages: [2, 10], got {}".format(
                     dest_sync_ff))
 
-        attrs = []
-        if ff_sync._max_input_delay is None:
-            attrs.append(("a", "nmigen.vivado.false_path", "TRUE"))
-        else:
-            attrs.append(("a", "nmigen.vivado.max_delay",
-                          str(ff_sync._max_input_delay * 1e9)))
-
         m.submodules += Instance(
             "xpm_cdc_array_single",
-            *attrs,
             p_DEST_SYNC_FF=dest_sync_ff,
             p_SRC_INPUT_REG=0,
             p_WIDTH=len(ff_sync.i),
@@ -422,16 +414,8 @@ class Xilinx7SeriesPlatform(TemplatedPlatform):
                 "allowed values for stages: [2, 10], got {}".format(
                     dest_sync_ff))
 
-        attrs = []
-        if reset_sync._max_input_delay is None:
-            attrs.append(("a", "nmigen.vivado.false_path", "TRUE"))
-        else:
-            attrs.append(("a", "nmigen.vivado.max_delay",
-                          str(reset_sync._max_input_delay * 1e9)))
-
         m.submodules += Instance(
             "xpm_cdc_async_rst",
-            *attrs,
             p_DEST_SYNC_FF=dest_sync_ff,
             p_RST_ACTIVE_HIGH=1,
             o_dest_arst=ResetSignal(reset_sync._domain),
