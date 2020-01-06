@@ -69,10 +69,12 @@ write_verilog -norename {write_verilog_opts}
 def convert_fragment(*args, strip_internal_attrs=False, **kwargs):
     rtlil_text, name_map = rtlil.convert_fragment(*args, **kwargs)
     return _convert_rtlil_text(
-        rtlil_text, strip_internal_attrs=strip_internal_attrs), name_map
+        rtlil_text, strip_internal_attrs=strip_internal_attrs,
+        write_verilog_opts=kwargs.get("write_verilog_opts", ())), name_map
 
 
 def convert(*args, strip_internal_attrs=False, **kwargs):
     rtlil_text = rtlil.convert(*args, **kwargs)
     return _convert_rtlil_text(
-        rtlil_text, strip_internal_attrs=strip_internal_attrs)
+        rtlil_text, strip_internal_attrs=strip_internal_attrs,
+        write_verilog_opts=kwargs.get("write_verilog_opts", ()))
