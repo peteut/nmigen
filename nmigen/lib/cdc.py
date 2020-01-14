@@ -4,8 +4,6 @@ from .._utils import _dispatchable
 
 
 __all__ = ["FFSynchronizer", "ResetSynchronizer"]
-# TODO(nmigen-0.2): remove this
-__all__ += ["MultiReg"]
 
 
 def _check_stages(stages):
@@ -94,10 +92,6 @@ class FFSynchronizer(Elaboratable):
             m.d[self._o_domain] += o.eq(i)
         m.d.comb += self.o.eq(flops[-1])
         return m
-
-
-# TODO(nmigen-0.2): remove this
-MultiReg = deprecated("instead of `MultiReg`, use `FFSynchronizer`")(FFSynchronizer)
 
 
 class ResetSynchronizer(Elaboratable):
