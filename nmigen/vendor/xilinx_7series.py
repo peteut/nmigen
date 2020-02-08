@@ -38,6 +38,7 @@ class Xilinx7SeriesPlatform(TemplatedPlatform):
         * ``{{name}}_clock_utilization.rpt``:  Vivado report.
         * ``{{name}}_route_status.rpt``: Vivado report.
         * ``{{name}}_drc.rpt``: Vivado report.
+        * ``{{name}}_methodology.rpt``: Vivado report.
         * ``{{name}}_timing.rpt``: Vivado report.
         * ``{{name}}_power.rpt``: Vivado report.
         * ``{{name}}_route.dcp``: Vivado design checkpoint.
@@ -116,6 +117,7 @@ class Xilinx7SeriesPlatform(TemplatedPlatform):
             write_checkpoint -force {{name}}_route.dcp
             report_route_status -file {{name}}_route_status.rpt
             report_drc -file {{name}}_drc.rpt
+            report_methodology -file {{name}}_methodology.rpt
             report_timing_summary -datasheet -max_paths 10 -file {{name}}_timing.rpt
             report_power -file {{name}}_power.rpt
             {{get_override("script_before_bitstream")|default("# (script_before_bitstream placeholder)")}}
@@ -131,8 +133,12 @@ class Xilinx7SeriesPlatform(TemplatedPlatform):
                     set_property {{attr_name}} {{attr_value}} [get_ports {{port_name}}]
                 {% endfor %}
             {% endfor %}
-            {% for signal, frequency in platform.iter_clock_constraints() -%}
-                create_clock -name {{signal.name}} -period {{1000000000/frequency}} [get_nets {{signal|hierarchy("/")}}]
+            {% for net_signal, port_signal, frequency in platform.iter_clock_constraints() -%}
+                {% if port_signal is not none -%}
+                    create_clock -name {{port_signal.name}} -period {{1000000000/frequency}} [get_ports {{port_signal.name}}]
+                {% else -%}
+                    create_clock -name {{net_signal.name}} -period {{1000000000/frequency}} [get_nets {{net_signal|hierarchy("/")}}]
+                {% endif %}
             {% endfor %}
             {{get_override("add_constraints")|default("# (add_constraints placeholder)")}}
         """
@@ -147,6 +153,12 @@ class Xilinx7SeriesPlatform(TemplatedPlatform):
             -source {{name}}.tcl
         """
     ]
+
+    def add_clock_constraint(self, clock, frequency):
+        super().add_clock_constraint(clock, frequency)
+        # Make sure the net constrained in the xdc file is kept through synthesis; it is redundant
+        # after Vivado flattens the hierarchy and will be eliminated if not explicitly kept.
+        clock.attrs["KEEP"] = "TRUE"
 
     def create_missing_domain(self, name):
         # Xilinx devices have a global write enable (GWE) signal that asserted during configuraiton
