@@ -1,6 +1,7 @@
 import inspect
 import warnings
 from contextlib import contextmanager
+import itertools
 from vcd import VCDWriter
 from vcd.gtkw import GTKWSave
 
@@ -85,7 +86,15 @@ class _VCDWaveformWriter(_WaveformWriter):
         self.gtkw_file = gtkw_file
         self.gtkw_save = gtkw_file and GTKWSave(self.gtkw_file)
 
-        for signal, names in signal_names.items():
+        self.traces = []
+
+        trace_names = SignalDict()
+        for trace in traces:
+            if trace not in signal_names:
+                trace_names[trace] = trace.name
+            self.traces.append(trace)
+
+        for signal, names in itertools.chain(signal_names.items(), trace_names.items()):
             if signal.decoder:
                 var_type = "string"
                 var_size = 1
@@ -137,12 +146,12 @@ class _VCDWaveformWriter(_WaveformWriter):
             self.gtkw_save.dumpfile_size(self.vcd_file.tell())
 
             self.gtkw_save.treeopen("top")
-            for signal, hierarchy in self.gtkw_names.items():
+            for signal in self.traces:
                 if len(signal) > 1 and not signal.decoder:
                     suffix = "[{}:0]".format(len(signal) - 1)
                 else:
                     suffix = ""
-                self.gtkw_save.trace(".".join(hierarchy) + suffix)
+                self.gtkw_save.trace(".".join(self.gtkw_names[signal]) + suffix)
 
         self.vcd_file.close()
         if self.gtkw_file is not None:
@@ -417,6 +426,9 @@ class _RHSValueCompiler(_ValueCompiler):
             if value.operator == "r^":
                 # Believe it or not, this is the fastest way to compute a sideways XOR in Python.
                 return f"(format({mask(arg)}, 'b').count('1') % 2)"
+            if value.operator in ("u", "s"):
+                # These operators don't change the bit pattern, only its interpretation.
+                return self(arg)
         elif len(value.operands) == 2:
             lhs, rhs = value.operands
             lhs_mask = (1 << len(lhs)) - 1
@@ -695,9 +707,6 @@ class _FragmentCompiler:
                 self.signal_names[signal].add(hierarchical_signal_name)
 
         for domain_name, domain_signals in fragment.drivers.items():
-            for domain_signal in domain_signals:
-                add_signal_name(domain_signal)
-
             domain_stmts = LHSGroupFilter(domain_signals)(fragment.statements)
             domain_process = _CompiledProcess(self.state, comb=domain_name is None,
                 name=".".join((*hierarchy, "<{}>".format(domain_name or "comb"))))
@@ -752,6 +761,9 @@ class _FragmentCompiler:
             domain_process.run = exec_locals["run"]
 
             processes.add(domain_process)
+
+            for used_signal in domain_process.context.indexes:
+                add_signal_name(used_signal)
 
         for subfragment_index, (subfragment, subfragment_name) in enumerate(fragment.subfragments):
             if subfragment_name is None:
