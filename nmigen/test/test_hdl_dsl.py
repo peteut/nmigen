@@ -19,6 +19,13 @@ class DSLTestCase(FHDLTestCase):
         self.c3 = Signal()
         self.w1 = Signal(4)
 
+    def test_cant_inherit(self):
+        with self.assertRaises(SyntaxError,
+                msg="Instead of inheriting from `Module`, inherit from `Elaboratable` and "
+                    "return a `Module` from the `elaborate(self, platform)` method"):
+            class ORGate(Module):
+                pass
+
     def test_d_comb(self):
         m = Module()
         m.d.comb += self.c1.eq(1)
@@ -300,6 +307,23 @@ class DSLTestCase(FHDLTestCase):
             with m.Elif(~True):
                 pass
 
+    def test_if_If_Elif_Else(self):
+        m = Module()
+        with self.assertRaises(SyntaxError,
+                msg="`if m.If(...):` does not work; use `with m.If(...)`"):
+            if m.If(0):
+                pass
+        with m.If(0):
+            pass
+        with self.assertRaises(SyntaxError,
+                msg="`if m.Elif(...):` does not work; use `with m.Elif(...)`"):
+            if m.Elif(0):
+                pass
+        with self.assertRaises(SyntaxError,
+                msg="`if m.Else(...):` does not work; use `with m.Else(...)`"):
+            if m.Else():
+                pass
+
     def test_Switch(self):
         m = Module()
         with m.Switch(self.w1):
@@ -307,12 +331,15 @@ class DSLTestCase(FHDLTestCase):
                 m.d.comb += self.c1.eq(1)
             with m.Case("11--"):
                 m.d.comb += self.c2.eq(1)
+            with m.Case("1 0--"):
+                m.d.comb += self.c2.eq(1)
         m._flush()
         self.assertRepr(m._statements, """
         (
             (switch (sig w1)
                 (case 0011 (eq (sig c1) (const 1'd1)))
                 (case 11-- (eq (sig c2) (const 1'd1)))
+                (case 10-- (eq (sig c2) (const 1'd1)))
             )
         )
         """)
@@ -383,6 +410,8 @@ class DSLTestCase(FHDLTestCase):
         """)
 
     def test_Case_width_wrong(self):
+        class Color(Enum):
+            RED = 0b10101010
         m = Module()
         with m.Switch(self.w1):
             with self.assertRaises(SyntaxError,
@@ -394,6 +423,11 @@ class DSLTestCase(FHDLTestCase):
                         "comparison will never be true"):
                 with m.Case(0b10110):
                     pass
+            with self.assertWarns(SyntaxWarning,
+                    msg="Case pattern '10101010' (Color.RED) is wider than switch value "
+                        "(which has width 4); comparison will never be true"):
+                with m.Case(Color.RED):
+                    pass
         self.assertRepr(m._statements, """
         (
             (switch (sig w1) )
@@ -404,7 +438,8 @@ class DSLTestCase(FHDLTestCase):
         m = Module()
         with m.Switch(self.w1):
             with self.assertRaises(SyntaxError,
-                    msg="Case pattern 'abc' must consist of 0, 1, and - (don't care) bits"):
+                    msg="Case pattern 'abc' must consist of 0, 1, and - (don't care) bits, "
+                        "and may include whitespace"):
                 with m.Case("abc"):
                     pass
 

@@ -18,7 +18,7 @@ __all__ = ["ValueVisitor", "ValueTransformer",
            "DomainCollector", "DomainRenamer", "DomainLowerer",
            "SampleDomainInjector", "SampleLowerer",
            "SwitchCleaner", "LHSGroupAnalyzer", "LHSGroupFilter",
-           "ResetInserter", "EnableInserter", "CEInserter"]
+           "ResetInserter", "EnableInserter"]
 
 
 class ValueVisitor(metaclass=ABCMeta):
@@ -95,7 +95,8 @@ class ValueVisitor(metaclass=ABCMeta):
             new_value = self.on_AnyConst(value)
         elif type(value) is AnySeq:
             new_value = self.on_AnySeq(value)
-        elif type(value) is Signal:
+        elif isinstance(value, Signal):
+            # Uses `isinstance()` and not `type() is` because nmigen.compat requires it.
             new_value = self.on_Signal(value)
         elif isinstance(value, Record):
             # Uses `isinstance()` and not `type() is` to allow inheriting from Record.
@@ -110,8 +111,7 @@ class ValueVisitor(metaclass=ABCMeta):
             new_value = self.on_Slice(value)
         elif type(value) is Part:
             new_value = self.on_Part(value)
-        elif isinstance(value, Cat):
-            # Uses `isinstance()` and not `type() is` because nmigen.compat requires it.
+        elif type(value) is Cat:
             new_value = self.on_Cat(value)
         elif type(value) is Repl:
             new_value = self.on_Repl(value)
@@ -234,6 +234,8 @@ class StatementVisitor(metaclass=ABCMeta):
             new_stmt.src_loc = stmt.src_loc
             if isinstance(new_stmt, Switch) and isinstance(stmt, Switch):
                 new_stmt.case_src_locs = stmt.case_src_locs
+        if isinstance(new_stmt, Property):
+            new_stmt._MustUse__used = True
         return new_stmt
 
     def __call__(self, stmt):
@@ -482,7 +484,7 @@ class DomainRenamer(FragmentTransformer, ValueTransformer, StatementTransformer)
             if domain in self.domain_map:
                 domain = self.domain_map[domain]
             for signal in signals:
-                new_fragment.add_driver(signal, domain)
+                new_fragment.add_driver(self.on_value(signal), domain)
 
 
 class DomainLowerer(FragmentTransformer, ValueTransformer, StatementTransformer):
@@ -750,7 +752,3 @@ class EnableInserter(_ControlInserter):
                 en_port = Mux(self.controls[clk_port.domain], en_port, Const(0, len(en_port)))
                 new_fragment.named_ports["EN"] = en_port, en_dir
         return new_fragment
-
-
-CEInserter = staticmethod(
-    deprecated("instead of `CEInserter`, use `EnableInserter`")(EnableInserter))

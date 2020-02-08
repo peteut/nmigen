@@ -1,5 +1,4 @@
 from abc import ABCMeta, abstractmethod
-import builtins
 import traceback
 import warnings
 import typing
@@ -9,6 +8,7 @@ from enum import Enum
 
 from .. import tracer
 from .._utils import *
+from .._unused import *
 
 
 __all__ = [
@@ -18,9 +18,9 @@ __all__ = [
     "Signal", "ClockSignal", "ResetSignal",
     "UserValue",
     "Sample", "Past", "Stable", "Rose", "Fell", "Initial",
-    "Statement", "Assign", "Assert", "Assume", "Cover", "Switch",
-    "ValueKey", "ValueDict", "ValueSet", "SignalKey", "SignalDict",
-    "SignalSet",
+    "Statement", "Switch",
+    "Property", "Assign", "Assert", "Assume", "Cover",
+    "ValueKey", "ValueDict", "ValueSet", "SignalKey", "SignalDict", "SignalSet",
 ]
 
 
@@ -124,12 +124,6 @@ class Value(metaclass=ABCMeta):
             return Const(obj.value, Shape.cast(type(obj)))
         raise TypeError("Object {!r} cannot be converted to an nMigen value".format(obj))
 
-    # TODO(nmigen-0.2): remove this
-    @classmethod
-    @deprecated("instead of `Value.wrap`, use `Value.cast`")
-    def wrap(cls, obj):
-        return cls.cast(obj)
-
     def __init__(self, *, src_loc_at=0):
         super().__init__()
         self.src_loc = tracer.get_src_loc(1 + src_loc_at)
@@ -178,14 +172,28 @@ class Value(metaclass=ABCMeta):
         self.__check_divisor()
         return Operator("//", [other, self])
 
+    def __check_shamt(self):
+        width, signed = self.shape()
+        if signed:
+            # Neither Python nor HDLs implement shifts by negative values; prohibit any shifts
+            # by a signed value to make sure the shift amount can always be interpreted as
+            # an unsigned value.
+            raise NotImplementedError("Shift by a signed value is not supported")
     def __lshift__(self, other):
+        other = Value.cast(other)
+        other.__check_shamt()
         return Operator("<<", [self, other])
     def __rlshift__(self, other):
+        self.__check_shamt()
         return Operator("<<", [other, self])
     def __rshift__(self, other):
+        other = Value.cast(other)
+        other.__check_shamt()
         return Operator(">>", [self, other])
     def __rrshift__(self, other):
+        self.__check_shamt()
         return Operator(">>", [other, self])
+
     def __and__(self, other):
         return Operator("&", [self, other])
     def __rand__(self, other):
@@ -281,11 +289,6 @@ class Value(metaclass=ABCMeta):
         """
         return ~premise | conclusion
 
-    # TODO(nmigen-0.2): move this to nmigen.compat and make it a deprecated extension
-    @deprecated("instead of `.part`, use `.bit_select`")
-    def part(self, offset, width):
-        return Part(self, offset, width, src_loc_at=1)
-
     def bit_select(self, offset, width):
         """Part-select with bit granularity.
 
@@ -354,11 +357,12 @@ class Value(metaclass=ABCMeta):
                 raise SyntaxError("Match pattern must be an integer, a string, or an enumeration, "
                                   "not {!r}"
                                   .format(pattern))
-            if isinstance(pattern, str) and any(bit not in "01-" for bit in pattern):
+            if isinstance(pattern, str) and any(bit not in "01- \t" for bit in pattern):
                 raise SyntaxError("Match pattern '{}' must consist of 0, 1, and - (don't care) "
-                                  "bits"
+                                  "bits, and may include whitespace"
                                   .format(pattern))
-            if isinstance(pattern, str) and len(pattern) != len(self):
+            if (isinstance(pattern, str) and
+                    len("".join(pattern.split())) != len(self)):
                 raise SyntaxError("Match pattern '{}' must have the same width as match value "
                                   "(which is {})"
                                   .format(pattern, len(self)))
@@ -369,6 +373,7 @@ class Value(metaclass=ABCMeta):
                               SyntaxWarning, stacklevel=3)
                 continue
             if isinstance(pattern, str):
+                pattern = "".join(pattern.split()) # remove whitespace
                 mask    = int(pattern.replace("0", "1").replace("-", "0"), 2)
                 pattern = int(pattern.replace("-", "0"), 2)
                 matches.append((self & mask) == pattern)
@@ -471,12 +476,6 @@ class Const(Value):
         self.width, self.signed = shape
         self.value = self.normalize(self.value, shape)
 
-    # TODO(nmigen-0.2): move this to nmigen.compat and make it a deprecated extension
-    @property
-    @deprecated("instead of `const.nbits`, use `const.width`")
-    def nbits(self):
-        return self.width
-
     def shape(self):
         return Shape(self.width, self.signed)
 
@@ -511,13 +510,13 @@ class AnyValue(Value, DUID):
 @final
 class AnyConst(AnyValue):
     def __repr__(self):
-        return "(anyconst {}'{})".format(self.nbits, "s" if self.signed else "")
+        return "(anyconst {}'{})".format(self.width, "s" if self.signed else "")
 
 
 @final
 class AnySeq(AnyValue):
     def __repr__(self):
-        return "(anyseq {}'{})".format(self.nbits, "s" if self.signed else "")
+        return "(anyseq {}'{})".format(self.width, "s" if self.signed else "")
 
 
 @final
@@ -526,12 +525,6 @@ class Operator(Value):
         super().__init__(src_loc_at=1 + src_loc_at)
         self.operator = operator
         self.operands = [Value.cast(op) for op in operands]
-
-    # TODO(nmigen-0.2): move this to nmigen.compat and make it a deprecated extension
-    @property
-    @deprecated("instead of `.op`, use `.operator`")
-    def op(self):
-        return self.operator
 
     def shape(self):
         def _bitwise_binary_shape(a_shape, b_shape):
@@ -644,13 +637,7 @@ class Slice(Value):
         super().__init__(src_loc_at=src_loc_at)
         self.value = Value.cast(value)
         self.start = start
-        self.stop   = stop
-
-    # TODO(nmigen-0.2): remove this
-    @property
-    @deprecated("instead of `slice.end`, use `slice.stop`")
-    def end(self):
-        return self.stop
+        self.stop  = stop
 
     def shape(self):
         return Shape(self.stop - self.start)
@@ -782,22 +769,20 @@ class Repl(Value):
         return "(repl {!r} {})".format(self.value, self.count)
 
 
-@final
+# @final
 class Signal(Value, DUID):
     """A varying integer value.
 
     Parameters
     ----------
-    shape : int or tuple or None
-        Either an integer ``width`` or a tuple ``(width, signed)`` specifying the number of bits
-        in this ``Signal`` and whether it is signed (can represent negative values).
-        ``shape`` defaults to 1-bit and non-signed.
+    shape : ``Shape``-castable object or None
+        Specification for the number of bits in this ``Signal`` and its signedness (whether it
+        can represent negative values). See ``Shape.cast`` for details.
+        If not specified, ``shape`` defaults to 1-bit and non-signed.
     name : str
         Name hint for this signal. If ``None`` (default) the name is inferred from the variable
-        name this ``Signal`` is assigned to. Name collisions are automatically resolved by
-        prepending names of objects that contain this ``Signal`` and by appending integer
-        sequences.
-    reset : int
+        name this ``Signal`` is assigned to.
+    reset : int or integral Enum
         Reset (synchronous) or default (combinatorial) value.
         When this ``Signal`` is assigned to in synchronous context and the corresponding clock
         domain is reset, the ``Signal`` assumes the given value. When this ``Signal`` is unassigned
@@ -807,11 +792,6 @@ class Signal(Value, DUID):
         If ``True``, do not generate reset logic for this ``Signal`` in synchronous statements.
         The ``reset`` value is only used as a combinatorial default or as the initial value.
         Defaults to ``False``.
-    min : int or None
-    max : int or None
-        If ``shape`` is ``None``, the signal bit width and signedness are
-        determined by the integer range given by ``min`` (inclusive,
-        defaults to 0) and ``max`` (exclusive, defaults to 2).
     attrs : dict
         Dictionary of synthesis attributes.
     decoder : function or Enum
@@ -828,43 +808,25 @@ class Signal(Value, DUID):
     reset : int
     reset_less : bool
     attrs : dict
+    decoder : function
     """
 
-    def __init__(self, shape=None, *, name=None, reset=0, reset_less=False, min=None, max=None,
+    def __init__(self, shape=None, *, name=None, reset=0, reset_less=False,
                  attrs=None, decoder=None, src_loc_at=0):
         super().__init__(src_loc_at=src_loc_at)
-
-        # TODO(nmigen-0.2): move this to nmigen.compat and make it a deprecated extension
-        if min is not None or max is not None:
-            warnings.warn("instead of `Signal(min={min}, max={max})`, "
-                          "use `Signal(range({min}, {max}))`"
-                          .format(min=min or 0, max=max or 2),
-                          DeprecationWarning, stacklevel=2 + src_loc_at)
 
         if name is not None and not isinstance(name, str):
             raise TypeError("Name must be a string, not {!r}".format(name))
         self.name = name or tracer.get_var_name(depth=2 + src_loc_at, default="$signal")
 
         if shape is None:
-            if min is None:
-                min = 0
-            if max is None:
-                max = 2
-            max -= 1  # make both bounds inclusive
-            if min > max:
-                raise ValueError("Lower bound {} should be less or equal to higher bound {}"
-                                 .format(min, max + 1))
-            self.signed = min < 0 or max < 0
-            if min == max:
-                self.width = 0
-            else:
-                self.width = builtins.max(bits_for(min, self.signed),
-                                          bits_for(max, self.signed))
+            shape = unsigned(1)
+        self.width, self.signed = Shape.cast(shape, src_loc_at=1 + src_loc_at)
 
-        else:
-            if not (min is None and max is None):
-                raise ValueError("Only one of bits/signedness or bounds may be specified")
-            self.width, self.signed = Shape.cast(shape, src_loc_at=1 + src_loc_at)
+        if isinstance(reset, Enum):
+            reset = reset.value
+        if not isinstance(reset, int):
+            raise TypeError("Reset value has to be an int or an integral Enum")
 
         reset_width = bits_for(reset, self.signed)
         if reset != 0 and reset_width > self.width:
@@ -873,7 +835,7 @@ class Signal(Value, DUID):
                           .format(reset, reset_width, self.width),
                           SyntaxWarning, stacklevel=2 + src_loc_at)
 
-        self.reset = int(reset)
+        self.reset = reset
         self.reset_less = bool(reset_less)
 
         self.attrs = OrderedDict(() if attrs is None else attrs)
@@ -890,20 +852,9 @@ class Signal(Value, DUID):
         else:
             self.decoder = decoder
 
-    @classmethod
-    @deprecated("instead of `Signal.range(...)`, use `Signal(range(...))`")
-    def range(cls, *args, src_loc_at=0, **kwargs):
-        return cls(range(*args), src_loc_at=2 + src_loc_at, **kwargs)
-
-    @classmethod
-    @deprecated("instead of `Signal.enum(...)`, use `Signal(...)`")
-    def enum(cls, enum_type, *, src_loc_at=0, **kwargs):
-        if not issubclass(enum_type, Enum):
-            raise TypeError("Type {!r} is not an enumeration")
-        return cls(enum_type, src_loc_at=2 + src_loc_at, **kwargs)
-
-    @classmethod
-    def like(cls, other, *, name=None, name_suffix=None, src_loc_at=0, **kwargs):
+    # Not a @classmethod because nmigen.compat requires it.
+    @staticmethod
+    def like(other, *, name=None, name_suffix=None, src_loc_at=0, **kwargs):
         """Create Signal based on another.
 
         Parameters
@@ -917,23 +868,12 @@ class Signal(Value, DUID):
             new_name = other.name + str(name_suffix)
         else:
             new_name = tracer.get_var_name(depth=2 + src_loc_at, default="$like")
-        kw = dict(shape=cls.cast(other).shape(), name=new_name)
-        if isinstance(other, cls):
+        kw = dict(shape=Value.cast(other).shape(), name=new_name)
+        if isinstance(other, Signal):
             kw.update(reset=other.reset, reset_less=other.reset_less,
                       attrs=other.attrs, decoder=other.decoder)
         kw.update(kwargs)
-        return cls(**kw, src_loc_at=1 + src_loc_at)
-
-    # TODO(nmigen-0.2): move this to nmigen.compat and make it a deprecated extension
-    @property
-    @deprecated("instead of `signal.nbits`, use `signal.width`")
-    def nbits(self):
-        return self.width
-
-    @nbits.setter
-    @deprecated("instead of `signal.nbits = x`, use `signal.width = x`")
-    def nbits(self, value):
-        self.width = value
+        return Signal(**kw, src_loc_at=1 + src_loc_at)
 
     def shape(self):
         return Shape(self.width, self.signed)
@@ -1264,12 +1204,6 @@ class Statement:
     def __init__(self, *, src_loc_at=0):
         self.src_loc = tracer.get_src_loc(1 + src_loc_at)
 
-    # TODO(nmigen-0.2): remove this
-    @classmethod
-    @deprecated("instead of `Statement.wrap`, use `Statement.cast`")
-    def wrap(cls, obj):
-        return cls.cast(obj)
-
     @staticmethod
     def cast(obj):
         if isinstance(obj, Iterable):
@@ -1298,7 +1232,13 @@ class Assign(Statement):
         return "(eq {!r} {!r})".format(self.lhs, self.rhs)
 
 
-class Property(Statement):
+class UnusedProperty(UnusedMustUse):
+    pass
+
+
+class Property(Statement, MustUse):
+    _MustUse__warning = UnusedProperty
+
     def __init__(self, test, *, _check=None, _en=None, src_loc_at=0):
         super().__init__(src_loc_at=src_loc_at)
         self.test   = Value.cast(test)
@@ -1362,7 +1302,7 @@ class Switch(Statement):
             new_keys = ()
             for key in keys:
                 if isinstance(key, str):
-                    pass
+                    key = "".join(key.split()) # remove whitespace
                 elif isinstance(key, int):
                     key = format(key, "b").rjust(len(self.test), "0")
                 elif isinstance(key, Enum):
@@ -1502,7 +1442,7 @@ class ValueKey:
             self._hash = hash((self.value.operator,
                                tuple(ValueKey(o) for o in self.value.operands)))
         elif isinstance(self.value, Slice):
-            self._hash = hash((ValueKey(self.value.value), self.value.start, self.value.end))
+            self._hash = hash((ValueKey(self.value.value), self.value.start, self.value.stop))
         elif isinstance(self.value, Part):
             self._hash = hash((ValueKey(self.value.value), ValueKey(self.value.offset),
                               self.value.width, self.value.stride))
@@ -1542,7 +1482,7 @@ class ValueKey:
         elif isinstance(self.value, Slice):
             return (ValueKey(self.value.value) == ValueKey(other.value.value) and
                     self.value.start == other.value.start and
-                    self.value.end == other.value.end)
+                    self.value.stop == other.value.stop)
         elif isinstance(self.value, Part):
             return (ValueKey(self.value.value) == ValueKey(other.value.value) and
                     ValueKey(self.value.offset) == ValueKey(other.value.offset) and
@@ -1601,7 +1541,7 @@ class ValueSet(_MappedKeySet):
 class SignalKey:
     def __init__(self, signal):
         self.signal = signal
-        if type(signal) is Signal:
+        if isinstance(signal, Signal):
             self._intern = (0, signal.duid)
         elif type(signal) is ClockSignal:
             self._intern = (1, signal.domain)

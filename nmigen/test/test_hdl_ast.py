@@ -362,15 +362,27 @@ class OperatorTestCase(FHDLTestCase):
         v1 = Const(1, 4) << Const(4)
         self.assertEqual(repr(v1), "(<< (const 4'd1) (const 3'd4))")
         self.assertEqual(v1.shape(), unsigned(11))
-        v2 = Const(1, 4) << Const(-3)
-        self.assertEqual(v2.shape(), unsigned(7))
+
+    def test_shl_wrong(self):
+        with self.assertRaises(NotImplementedError,
+                msg="Shift by a signed value is not supported"):
+            1 << Const(0, signed(6))
+        with self.assertRaises(NotImplementedError,
+                msg="Shift by a signed value is not supported"):
+            Const(1, unsigned(4)) << -1
 
     def test_shr(self):
         v1 = Const(1, 4) >> Const(4)
         self.assertEqual(repr(v1), "(>> (const 4'd1) (const 3'd4))")
         self.assertEqual(v1.shape(), unsigned(4))
-        v2 = Const(1, 4) >> Const(-3)
-        self.assertEqual(v2.shape(), unsigned(8))
+
+    def test_shr_wrong(self):
+        with self.assertRaises(NotImplementedError,
+                msg="Shift by a signed value is not supported"):
+            1 << Const(0, signed(6))
+        with self.assertRaises(NotImplementedError,
+                msg="Shift by a signed value is not supported"):
+            Const(1, unsigned(4)) << -1
 
     def test_lt(self):
         v = Const(0, 4) < Const(0, 6)
@@ -452,6 +464,9 @@ class OperatorTestCase(FHDLTestCase):
         self.assertRepr(s.matches("10--"), """
         (== (& (sig s) (const 4'd12)) (const 4'd8))
         """)
+        self.assertRepr(s.matches("1 0--"), """
+        (== (& (sig s) (const 4'd12)) (const 4'd8))
+        """)
 
     def test_matches_enum(self):
         s = Signal(SignedEnum)
@@ -472,7 +487,8 @@ class OperatorTestCase(FHDLTestCase):
     def test_matches_bits_wrong(self):
         s = Signal(4)
         with self.assertRaises(SyntaxError,
-                msg="Match pattern 'abc' must consist of 0, 1, and - (don't care) bits"):
+                msg="Match pattern 'abc' must consist of 0, 1, and - (don't care) bits, "
+                    "and may include whitespace"):
             s.matches("abc")
 
     def test_matches_pattern_wrong(self):
@@ -712,37 +728,11 @@ class SignalTestCase(FHDLTestCase):
         self.assertEqual(s10.shape(), unsigned(0))
         s11 = Signal(range(1))
         self.assertEqual(s11.shape(), unsigned(1))
-        # deprecated
-        with warnings.catch_warnings():
-            warnings.filterwarnings(action="ignore", category=DeprecationWarning)
-            d6 = Signal(max=16)
-            self.assertEqual(d6.shape(), unsigned(4))
-            d7 = Signal(min=4, max=16)
-            self.assertEqual(d7.shape(), unsigned(4))
-            d8 = Signal(min=-4, max=16)
-            self.assertEqual(d8.shape(), signed(5))
-            d9 = Signal(min=-20, max=16)
-            self.assertEqual(d9.shape(), signed(6))
-            d10 = Signal(max=1)
-            self.assertEqual(d10.shape(), unsigned(0))
 
     def test_shape_wrong(self):
         with self.assertRaises(TypeError,
                 msg="Width must be a non-negative integer, not -10"):
             Signal(-10)
-
-    def test_min_max_deprecated(self):
-        with self.assertWarns(DeprecationWarning,
-                msg="instead of `Signal(min=0, max=10)`, use `Signal(range(0, 10))`"):
-            Signal(max=10)
-        with warnings.catch_warnings():
-            warnings.filterwarnings(action="ignore", category=DeprecationWarning)
-            with self.assertRaises(ValueError,
-                    msg="Lower bound 10 should be less or equal to higher bound 4"):
-                Signal(min=10, max=4)
-            with self.assertRaises(ValueError,
-                    msg="Only one of bits/signedness or bounds may be specified"):
-                Signal(2, min=10)
 
     def test_name(self):
         s1 = Signal()
@@ -754,6 +744,14 @@ class SignalTestCase(FHDLTestCase):
         s1 = Signal(4, reset=0b111, reset_less=True)
         self.assertEqual(s1.reset, 0b111)
         self.assertEqual(s1.reset_less, True)
+
+    def test_reset_enum(self):
+        s1 = Signal(2, reset=UnsignedEnum.BAR)
+        self.assertEqual(s1.reset, 2)
+        with self.assertRaises(TypeError,
+                msg="Reset value has to be an int or an integral Enum"
+        ):
+            Signal(1, reset=StringEnum.FOO)
 
     def test_reset_narrow(self):
         with self.assertWarns(SyntaxWarning,
