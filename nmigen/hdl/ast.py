@@ -8,6 +8,7 @@ from enum import Enum
 
 from .. import tracer
 from .._utils import *
+from .._unused import *
 
 
 __all__ = [
@@ -17,9 +18,9 @@ __all__ = [
     "Signal", "ClockSignal", "ResetSignal",
     "UserValue",
     "Sample", "Past", "Stable", "Rose", "Fell", "Initial",
-    "Statement", "Assign", "Assert", "Assume", "Cover", "Switch",
-    "ValueKey", "ValueDict", "ValueSet", "SignalKey", "SignalDict",
-    "SignalSet",
+    "Statement", "Switch",
+    "Property", "Assign", "Assert", "Assume", "Cover",
+    "ValueKey", "ValueDict", "ValueSet", "SignalKey", "SignalDict", "SignalSet",
 ]
 
 
@@ -171,14 +172,28 @@ class Value(metaclass=ABCMeta):
         self.__check_divisor()
         return Operator("//", [other, self])
 
+    def __check_shamt(self):
+        width, signed = self.shape()
+        if signed:
+            # Neither Python nor HDLs implement shifts by negative values; prohibit any shifts
+            # by a signed value to make sure the shift amount can always be interpreted as
+            # an unsigned value.
+            raise NotImplementedError("Shift by a signed value is not supported")
     def __lshift__(self, other):
+        other = Value.cast(other)
+        other.__check_shamt()
         return Operator("<<", [self, other])
     def __rlshift__(self, other):
+        self.__check_shamt()
         return Operator("<<", [other, self])
     def __rshift__(self, other):
+        other = Value.cast(other)
+        other.__check_shamt()
         return Operator(">>", [self, other])
     def __rrshift__(self, other):
+        self.__check_shamt()
         return Operator(">>", [other, self])
+
     def __and__(self, other):
         return Operator("&", [self, other])
     def __rand__(self, other):
@@ -342,11 +357,12 @@ class Value(metaclass=ABCMeta):
                 raise SyntaxError("Match pattern must be an integer, a string, or an enumeration, "
                                   "not {!r}"
                                   .format(pattern))
-            if isinstance(pattern, str) and any(bit not in "01-" for bit in pattern):
+            if isinstance(pattern, str) and any(bit not in "01- \t" for bit in pattern):
                 raise SyntaxError("Match pattern '{}' must consist of 0, 1, and - (don't care) "
-                                  "bits"
+                                  "bits, and may include whitespace"
                                   .format(pattern))
-            if isinstance(pattern, str) and len(pattern) != len(self):
+            if (isinstance(pattern, str) and
+                    len("".join(pattern.split())) != len(self)):
                 raise SyntaxError("Match pattern '{}' must have the same width as match value "
                                   "(which is {})"
                                   .format(pattern, len(self)))
@@ -357,6 +373,7 @@ class Value(metaclass=ABCMeta):
                               SyntaxWarning, stacklevel=3)
                 continue
             if isinstance(pattern, str):
+                pattern = "".join(pattern.split()) # remove whitespace
                 mask    = int(pattern.replace("0", "1").replace("-", "0"), 2)
                 pattern = int(pattern.replace("-", "0"), 2)
                 matches.append((self & mask) == pattern)
@@ -493,13 +510,13 @@ class AnyValue(Value, DUID):
 @final
 class AnyConst(AnyValue):
     def __repr__(self):
-        return "(anyconst {}'{})".format(self.nbits, "s" if self.signed else "")
+        return "(anyconst {}'{})".format(self.width, "s" if self.signed else "")
 
 
 @final
 class AnySeq(AnyValue):
     def __repr__(self):
-        return "(anyseq {}'{})".format(self.nbits, "s" if self.signed else "")
+        return "(anyseq {}'{})".format(self.width, "s" if self.signed else "")
 
 
 @final
@@ -758,15 +775,13 @@ class Signal(Value, DUID):
 
     Parameters
     ----------
-    shape : int or tuple or None
-        Either an integer ``width`` or a tuple ``(width, signed)`` specifying the number of bits
-        in this ``Signal`` and whether it is signed (can represent negative values).
-        ``shape`` defaults to 1-bit and non-signed.
+    shape : ``Shape``-castable object or None
+        Specification for the number of bits in this ``Signal`` and its signedness (whether it
+        can represent negative values). See ``Shape.cast`` for details.
+        If not specified, ``shape`` defaults to 1-bit and non-signed.
     name : str
         Name hint for this signal. If ``None`` (default) the name is inferred from the variable
-        name this ``Signal`` is assigned to. Name collisions are automatically resolved by
-        prepending names of objects that contain this ``Signal`` and by appending integer
-        sequences.
+        name this ``Signal`` is assigned to.
     reset : int or integral Enum
         Reset (synchronous) or default (combinatorial) value.
         When this ``Signal`` is assigned to in synchronous context and the corresponding clock
@@ -777,11 +792,6 @@ class Signal(Value, DUID):
         If ``True``, do not generate reset logic for this ``Signal`` in synchronous statements.
         The ``reset`` value is only used as a combinatorial default or as the initial value.
         Defaults to ``False``.
-    min : int or None
-    max : int or None
-        If ``shape`` is ``None``, the signal bit width and signedness are
-        determined by the integer range given by ``min`` (inclusive,
-        defaults to 0) and ``max`` (exclusive, defaults to 2).
     attrs : dict
         Dictionary of synthesis attributes.
     decoder : function or Enum
@@ -798,6 +808,7 @@ class Signal(Value, DUID):
     reset : int
     reset_less : bool
     attrs : dict
+    decoder : function
     """
 
     def __init__(self, shape=None, *, name=None, reset=0, reset_less=False,
@@ -1221,7 +1232,13 @@ class Assign(Statement):
         return "(eq {!r} {!r})".format(self.lhs, self.rhs)
 
 
-class Property(Statement):
+class UnusedProperty(UnusedMustUse):
+    pass
+
+
+class Property(Statement, MustUse):
+    _MustUse__warning = UnusedProperty
+
     def __init__(self, test, *, _check=None, _en=None, src_loc_at=0):
         super().__init__(src_loc_at=src_loc_at)
         self.test   = Value.cast(test)
@@ -1285,7 +1302,7 @@ class Switch(Statement):
             new_keys = ()
             for key in keys:
                 if isinstance(key, str):
-                    pass
+                    key = "".join(key.split()) # remove whitespace
                 elif isinstance(key, int):
                     key = format(key, "b").rjust(len(self.test), "0")
                 elif isinstance(key, Enum):

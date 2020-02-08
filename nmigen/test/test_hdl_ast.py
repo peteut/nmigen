@@ -362,15 +362,27 @@ class OperatorTestCase(FHDLTestCase):
         v1 = Const(1, 4) << Const(4)
         self.assertEqual(repr(v1), "(<< (const 4'd1) (const 3'd4))")
         self.assertEqual(v1.shape(), unsigned(11))
-        v2 = Const(1, 4) << Const(-3)
-        self.assertEqual(v2.shape(), unsigned(7))
+
+    def test_shl_wrong(self):
+        with self.assertRaises(NotImplementedError,
+                msg="Shift by a signed value is not supported"):
+            1 << Const(0, signed(6))
+        with self.assertRaises(NotImplementedError,
+                msg="Shift by a signed value is not supported"):
+            Const(1, unsigned(4)) << -1
 
     def test_shr(self):
         v1 = Const(1, 4) >> Const(4)
         self.assertEqual(repr(v1), "(>> (const 4'd1) (const 3'd4))")
         self.assertEqual(v1.shape(), unsigned(4))
-        v2 = Const(1, 4) >> Const(-3)
-        self.assertEqual(v2.shape(), unsigned(8))
+
+    def test_shr_wrong(self):
+        with self.assertRaises(NotImplementedError,
+                msg="Shift by a signed value is not supported"):
+            1 << Const(0, signed(6))
+        with self.assertRaises(NotImplementedError,
+                msg="Shift by a signed value is not supported"):
+            Const(1, unsigned(4)) << -1
 
     def test_lt(self):
         v = Const(0, 4) < Const(0, 6)
@@ -452,6 +464,9 @@ class OperatorTestCase(FHDLTestCase):
         self.assertRepr(s.matches("10--"), """
         (== (& (sig s) (const 4'd12)) (const 4'd8))
         """)
+        self.assertRepr(s.matches("1 0--"), """
+        (== (& (sig s) (const 4'd12)) (const 4'd8))
+        """)
 
     def test_matches_enum(self):
         s = Signal(SignedEnum)
@@ -472,7 +487,8 @@ class OperatorTestCase(FHDLTestCase):
     def test_matches_bits_wrong(self):
         s = Signal(4)
         with self.assertRaises(SyntaxError,
-                msg="Match pattern 'abc' must consist of 0, 1, and - (don't care) bits"):
+                msg="Match pattern 'abc' must consist of 0, 1, and - (don't care) bits, "
+                    "and may include whitespace"):
             s.matches("abc")
 
     def test_matches_pattern_wrong(self):
