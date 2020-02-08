@@ -132,9 +132,7 @@ class Xilinx7SeriesPlatform(TemplatedPlatform):
                 {% endfor %}
             {% endfor %}
             {% for signal, frequency in platform.iter_clock_constraints() -%}
-                create_clock -name {{signal.name}} -period {{1000000000/frequency}} \
-                    [filter -regexp [all_fanin -flat -startpoints_only \
-                    [get_nets {{signal|hierarchy("/")}}]] {NAME =~{(^.*__p$)|(^.*__io$)|(^.+/.+$)}}]
+                create_clock -name {{signal.name}} -period {{1000000000/frequency}} [get_nets {{signal|hierarchy("/")}}]
             {% endfor %}
             {{get_override("add_constraints")|default("# (add_constraints placeholder)")}}
         """
@@ -149,12 +147,6 @@ class Xilinx7SeriesPlatform(TemplatedPlatform):
             -source {{name}}.tcl
         """
     ]
-
-    def add_clock_constraint(self, clock, frequency):
-        super().add_clock_constraint(clock, frequency)
-        # Make sure the net constrained in the xdc file is kept through synthesis; it is redundant
-        # after Vivado flattens the hierarchy and will be eliminated if not explicitly kept.
-        clock.attrs["KEEP"] = "TRUE"
 
     def create_missing_domain(self, name):
         # Xilinx devices have a global write enable (GWE) signal that asserted during configuraiton
