@@ -180,7 +180,7 @@ class Xilinx7SeriesPlatform(TemplatedPlatform):
             m.domains += ClockDomain("sync", reset_less=self.default_rst is None)
             m.submodules += Instance("BUFGCE", i_CE=ready, i_I=clk_i, o_O=ClockSignal("sync"))
             if self.default_rst is not None:
-                m.submodules.reset_sync = ResetSynchronizer(rst_i, domain="sync")
+                m.submodules.async_ff_sync = ResetSynchronizer(rst_i, domain="sync")
             return m
 
     def _get_xdr_buffer(self, m, pin, *, i_invert=False, o_invert=False):
@@ -418,20 +418,21 @@ class Xilinx7SeriesPlatform(TemplatedPlatform):
         )
         return m
 
-    def get_reset_sync(self, reset_sync):
+    def get_async_ff_sync(self, async_ff_sync):
         m = Module()
-        dest_sync_ff = reset_sync._stages
+        dest_sync_ff = async_ff_sync._stages
         if dest_sync_ff not in range(2, 11):
             raise ValueError(
                 "allowed values for stages: [2, 10], got {}".format(
                     dest_sync_ff))
 
+        # TODO: handle async_ff_sync._max_input_delay
         m.submodules += Instance(
             "xpm_cdc_async_rst",
             p_DEST_SYNC_FF=dest_sync_ff,
             p_RST_ACTIVE_HIGH=1,
-            o_dest_arst=ResetSignal(reset_sync._domain),
-            i_dest_clk=ClockSignal(reset_sync._domain),
-            i_src_arst=reset_sync.arst
+            o_dest_arst=ResetSignal(async_ff_sync._domain),
+            i_dest_clk=ClockSignal(async_ff_sync._domain),
+            i_src_arst=async_ff_sync.arst
         )
         return m

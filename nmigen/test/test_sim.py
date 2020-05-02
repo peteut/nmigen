@@ -110,6 +110,13 @@ class SimulatorUnitTestCase(FHDLTestCase):
         self.assertStatement(stmt, [C(2,  4), C(2,  4)], C(1,   8))
         self.assertStatement(stmt, [C(7,  4), C(2,  4)], C(3,   8))
 
+    def test_mod(self):
+        stmt = lambda y, a, b: y.eq(a % b)
+        self.assertStatement(stmt, [C(2,  4), C(0,  4)], C(0,   8))
+        self.assertStatement(stmt, [C(2,  4), C(1,  4)], C(0,   8))
+        self.assertStatement(stmt, [C(2,  4), C(2,  4)], C(0,   8))
+        self.assertStatement(stmt, [C(7,  4), C(2,  4)], C(1,   8))
+
     def test_and(self):
         stmt = lambda y, a, b: y.eq(a & b)
         self.assertStatement(stmt, [C(0b1100, 4), C(0b1010, 4)], C(0b1000, 4))
@@ -172,6 +179,13 @@ class SimulatorUnitTestCase(FHDLTestCase):
         stmt = lambda y, a, b, c: y.eq(Mux(c, a, b))
         self.assertStatement(stmt, [C(2, 4), C(3, 4), C(0)], C(3, 4))
         self.assertStatement(stmt, [C(2, 4), C(3, 4), C(1)], C(2, 4))
+
+    def test_abs(self):
+        stmt = lambda y, a: y.eq(abs(a))
+        self.assertStatement(stmt, [C(3,  unsigned(8))], C(3,  unsigned(8)))
+        self.assertStatement(stmt, [C(-3, unsigned(8))], C(-3, unsigned(8)))
+        self.assertStatement(stmt, [C(3,  signed(8))],   C(3,  signed(8)))
+        self.assertStatement(stmt, [C(-3, signed(8))],   C(3,  signed(8)))
 
     def test_slice(self):
         stmt1 = lambda y, a: y.eq(a[2])
@@ -287,6 +301,57 @@ class SimulatorUnitTestCase(FHDLTestCase):
         for i in range(10):
             self.assertStatement(stmt, [C(i)], C(0))
 
+    def test_rotate_left(self):
+        stmt = lambda y, a: y.eq(a.rotate_left(1))
+        self.assertStatement(stmt, [C(0b1)], C(0b1))
+        self.assertStatement(stmt, [C(0b1001000)], C(0b0010001))
+        stmt = lambda y, a: y.eq(a.rotate_left(5))
+        self.assertStatement(stmt, [C(0b1000000)], C(0b0010000))
+        self.assertStatement(stmt, [C(0b1000001)], C(0b0110000))
+        stmt = lambda y, a: y.eq(a.rotate_left(7))
+        self.assertStatement(stmt, [C(0b1000000)], C(0b1000000))
+        self.assertStatement(stmt, [C(0b1000001)], C(0b1000001))
+        stmt = lambda y, a: y.eq(a.rotate_left(9))
+        self.assertStatement(stmt, [C(0b1000000)], C(0b0000010))
+        self.assertStatement(stmt, [C(0b1000001)], C(0b0000110))
+        stmt = lambda y, a: y.eq(a.rotate_left(-1))
+        self.assertStatement(stmt, [C(0b1)], C(0b1))
+        self.assertStatement(stmt, [C(0b1001000)], C(0b0100100))
+        stmt = lambda y, a: y.eq(a.rotate_left(-5))
+        self.assertStatement(stmt, [C(0b1000000)], C(0b0000010))
+        self.assertStatement(stmt, [C(0b1000001)], C(0b0000110))
+        stmt = lambda y, a: y.eq(a.rotate_left(-7))
+        self.assertStatement(stmt, [C(0b1000000)], C(0b1000000))
+        self.assertStatement(stmt, [C(0b1000001)], C(0b1000001))
+        stmt = lambda y, a: y.eq(a.rotate_left(-9))
+        self.assertStatement(stmt, [C(0b1000000)], C(0b0010000))
+        self.assertStatement(stmt, [C(0b1000001)], C(0b0110000))
+
+    def test_rotate_right(self):
+        stmt = lambda y, a: y.eq(a.rotate_right(1))
+        self.assertStatement(stmt, [C(0b1)], C(0b1))
+        self.assertStatement(stmt, [C(0b1001000)], C(0b0100100))
+        stmt = lambda y, a: y.eq(a.rotate_right(5))
+        self.assertStatement(stmt, [C(0b1000000)], C(0b0000010))
+        self.assertStatement(stmt, [C(0b1000001)], C(0b0000110))
+        stmt = lambda y, a: y.eq(a.rotate_right(7))
+        self.assertStatement(stmt, [C(0b1000000)], C(0b1000000))
+        self.assertStatement(stmt, [C(0b1000001)], C(0b1000001))
+        stmt = lambda y, a: y.eq(a.rotate_right(9))
+        self.assertStatement(stmt, [C(0b1000000)], C(0b0010000))
+        self.assertStatement(stmt, [C(0b1000001)], C(0b0110000))
+        stmt = lambda y, a: y.eq(a.rotate_right(-1))
+        self.assertStatement(stmt, [C(0b1)], C(0b1))
+        self.assertStatement(stmt, [C(0b1001000)], C(0b0010001))
+        stmt = lambda y, a: y.eq(a.rotate_right(-5))
+        self.assertStatement(stmt, [C(0b1000000)], C(0b0010000))
+        self.assertStatement(stmt, [C(0b1000001)], C(0b0110000))
+        stmt = lambda y, a: y.eq(a.rotate_right(-7))
+        self.assertStatement(stmt, [C(0b1000000)], C(0b1000000))
+        self.assertStatement(stmt, [C(0b1000001)], C(0b1000001))
+        stmt = lambda y, a: y.eq(a.rotate_right(-9))
+        self.assertStatement(stmt, [C(0b1000000)], C(0b0000010))
+        self.assertStatement(stmt, [C(0b1000001)], C(0b0000110))
 
 class SimulatorIntegrationTestCase(FHDLTestCase):
     @contextmanager
@@ -712,3 +777,15 @@ class SimulatorIntegrationTestCase(FHDLTestCase):
             with sim.write_vcd(open(os.path.devnull, "wt")):
                 with sim.write_vcd(open(os.path.devnull, "wt")):
                     pass
+
+
+class SimulatorRegressionTestCase(FHDLTestCase):
+    def test_bug_325(self):
+        dut = Module()
+        dut.d.comb += Signal().eq(Cat())
+        Simulator(dut).run()
+
+    def test_bug_325_bis(self):
+        dut = Module()
+        dut.d.comb += Signal().eq(Repl(Const(1), 0))
+        Simulator(dut).run()

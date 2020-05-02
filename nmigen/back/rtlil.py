@@ -10,6 +10,31 @@ from ..hdl import ast, rec, ir, mem, xfrm
 __all__ = ["convert", "convert_fragment"]
 
 
+class ImplementationLimit(Exception):
+    pass
+
+
+_escape_map = str.maketrans({
+    "\"": "\\\"",
+    "\\": "\\\\",
+    "\t": "\\t",
+    "\r": "\\r",
+    "\n": "\\n",
+})
+
+
+def const(value):
+    if isinstance(value, str):
+        return "\"{}\"".format(value.translate(_escape_map))
+    elif isinstance(value, int):
+        return "{:d}".format(value)
+    elif isinstance(value, ast.Const):
+        value_twos_compl = value.value & ((1 << value.width) - 1)
+        return "{}'{:0{}b}".format(value.width, value_twos_compl, value.width)
+    else:
+        assert False, "Invalid constant {!r}".format(value)
+
+
 class _Namer:
     def __init__(self):
         super().__init__()
@@ -54,21 +79,9 @@ class _ProxiedBuilder:
 
 
 class _AttrBuilder:
-    _escape_map = str.maketrans({
-        "\"": "\\\"",
-        "\\": "\\\\",
-        "\t": "\\t",
-        "\r": "\\r",
-        "\n": "\\n",
-    })
-
     def _attribute(self, name, value, *, indent=0):
-        if isinstance(value, str):
-            self._append("{}attribute \\{} \"{}\"\n",
-                         "  " * indent, name, value.translate(self._escape_map))
-        else:
-            self._append("{}attribute \\{} {}\n",
-                         "  " * indent, name, int(value))
+        self._append("{}attribute \\{} {}\n",
+                     "  " * indent, name, const(value))
 
     def _attributes(self, attrs, *, src=None, **kwargs):
         for name, value in attrs.items():
@@ -101,6 +114,15 @@ class _ModuleBuilder(_Namer, _BufferedBuilder, _AttrBuilder):
         self.rtlil._buffer.write(str(self))
 
     def wire(self, width, port_id=None, port_kind=None, name=None, attrs={}, src=""):
+        # Very large wires are unlikely to work. Verilog 1364-2005 requires the limit on vectors
+        # to be at least 2**16 bits, and Yosys 0.9 breaks on wires of more than 2**32 bits, so
+        # those numbers are our hard bounds. Use 2**24 as the arbitrary boundary beyond which
+        # downstream bugs are more likely than not.
+        if width > 2 ** 24:
+            raise ImplementationLimit("Wire created at {} is {} bits wide, which is unlikely to "
+                                      "synthesize correctly"
+                                      .format(src or "unknown location", width))
+
         self._attributes(attrs, src=src, indent=1)
         name = self._make_name(name, local=False)
         if port_id is None:
@@ -124,20 +146,12 @@ class _ModuleBuilder(_Namer, _BufferedBuilder, _AttrBuilder):
         name = self._make_name(name, local=False)
         self._append("  cell {} {}\n", kind, name)
         for param, value in params.items():
-            if isinstance(value, str):
-                self._append("    parameter \\{} \"{}\"\n",
-                             param, value.translate(self._escape_map))
-            elif isinstance(value, int):
-                self._append("    parameter \\{} {}'{:b}\n",
-                             param, bits_for(value), value)
-            elif isinstance(value, float):
+            if isinstance(value, float):
                 self._append("    parameter real \\{} \"{!r}\"\n",
                              param, value)
-            elif isinstance(value, ast.Const):
-                self._append("    parameter \\{} {}'{:b}\n",
-                             param, len(value), value.value)
             else:
-                assert False, "Bad parameter {!r}".format(value)
+                self._append("    parameter \\{} {}\n",
+                             param, const(value))
         for port, wire in ports.items():
             self._append("    connect {} {}\n", port, wire)
         self._append("  end\n")
@@ -293,10 +307,15 @@ class _ValueCompilerState:
         else:
             wire_name = signal.name
 
+        attrs = dict(signal.attrs)
+        if signal._enum_class is not None:
+            attrs["enum_base_type"] = signal._enum_class.__name__
+            for value in signal._enum_class:
+                attrs["enum_value_{:0{}b}".format(value.value, signal.width)] = value.name
+
         wire_curr = self.rtlil.wire(width=signal.width, name=wire_name,
                                     port_id=port_id, port_kind=port_kind,
-                                    attrs=signal.attrs,
-                                    src=src(signal.src_loc))
+                                    attrs=attrs, src=src(signal.src_loc))
         if signal in self.driven and self.driven[signal]:
             wire_next = self.rtlil.wire(width=signal.width, name=wire_curr + "$next",
                                         src=src(signal.src_loc))
@@ -347,9 +366,6 @@ class _ValueCompiler(xfrm.ValueVisitor):
     def on_Initial(self, value):
         raise NotImplementedError # :nocov:
 
-    def on_Record(self, value):
-        return self(ast.Cat(value.fields.values()))
-
     def on_Cat(self, value):
         return "{{ {} }}".format(" ".join(reversed([self(o) for o in value.parts])))
 
@@ -360,7 +376,11 @@ class _ValueCompiler(xfrm.ValueVisitor):
         if value.start == 0 and value.stop == len(value.value):
             return self(value.value)
 
-        sigspec = self._prepare_value_for_Slice(value.value)
+        if isinstance(value.value, ast.UserValue):
+            sigspec = self._prepare_value_for_Slice(value.value._lazy_lower())
+        else:
+            sigspec = self._prepare_value_for_Slice(value.value)
+
         if value.start == value.stop:
             return "{}"
         elif value.start + 1 == value.stop:
@@ -414,11 +434,7 @@ class _RHSValueCompiler(_ValueCompiler):
         return super().on_value(self.s.expand(value))
 
     def on_Const(self, value):
-        if isinstance(value.value, str):
-            return "{}'{}".format(value.width, value.value)
-        else:
-            value_twos_compl = value.value & ((1 << value.width) - 1)
-            return "{}'{:0{}b}".format(value.width, value_twos_compl, value.width)
+        return const(value)
 
     def on_AnyConst(self, value):
         if value in self.s.anys:
@@ -576,7 +592,7 @@ class _RHSValueCompiler(_ValueCompiler):
         res_bits, res_sign = value.shape()
         res = self.s.rtlil.wire(width=res_bits, src=src(value.src_loc))
         # Note: Verilog's x[o+:w] construct produces a $shiftx cell, not a $shift cell.
-        # However, Migen's semantics defines the out-of-range bits to be zero, so it is correct
+        # However, nMigen's semantics defines the out-of-range bits to be zero, so it is correct
         # to use a $shift cell here instead, even though it produces less idiomatic Verilog.
         self.s.rtlil.cell("$shift", ports={
             "\\A": self(lhs),
@@ -626,25 +642,27 @@ class _LHSValueCompiler(_ValueCompiler):
         return wire_next or wire_curr
 
     def _prepare_value_for_Slice(self, value):
-        assert isinstance(value, (ast.Signal, ast.Slice, ast.Cat, rec.Record))
+        assert isinstance(value, (ast.Signal, ast.Slice, ast.Cat))
         return self(value)
 
     def on_Part(self, value):
         offset = self.s.expand(value.offset)
         if isinstance(offset, ast.Const):
-            if offset.value == len(value.value):
-                dummy_wire = self.s.rtlil.wire(value.width)
-                return dummy_wire
-            return self(ast.Slice(value.value,
-                                  offset.value * value.stride,
-                                  offset.value * value.stride + value.width))
+            start = offset.value * value.stride
+            stop  = start + value.width
+            slice = self(ast.Slice(value.value, start, min(len(value.value), stop)))
+            if len(value.value) >= stop:
+                return slice
+            else:
+                dummy_wire = self.s.rtlil.wire(stop - len(value.value))
+                return "{{ {} {} }}".format(dummy_wire, slice)
         else:
             # Only so many possible parts. The amount of branches is exponential; if value.offset
             # is large (e.g. 32-bit wide), trying to naively legalize it is likely to exhaust
             # system resources.
             max_branches = len(value.value) // value.stride + 1
             raise LegalizeValue(value.offset,
-                                range((1 << len(value.offset)) // value.stride)[:max_branches],
+                                range(1 << len(value.offset))[:max_branches],
                                 value.src_loc)
 
     def on_Repl(self, value):
@@ -865,7 +883,8 @@ def _convert_fragment(builder, fragment, name_map, hierarchy):
                 if not isinstance(subfragment, ir.Instance):
                     for signal in value._rhs_signals():
                         compiler_state.resolve_curr(signal, prefix=sub_name)
-                sub_ports[port] = rhs_compiler(value)
+                if len(value) > 0:
+                    sub_ports[port] = rhs_compiler(value)
 
             module.cell(sub_type, name=sub_name, ports=sub_ports, params=sub_params,
                         attrs=subfragment.attrs)

@@ -39,6 +39,10 @@ class ShapeTestCase(FHDLTestCase):
                 msg="Width must be a non-negative integer, not -1"):
             Shape(-1)
 
+    def test_repr(self):
+        self.assertEqual(repr(Shape()), "unsigned(1)")
+        self.assertEqual(repr(Shape(2, True)), "signed(2)")
+
     def test_tuple(self):
         width, signed = Shape()
         self.assertEqual(width, 1)
@@ -201,6 +205,27 @@ class ValueTestCase(FHDLTestCase):
                 msg="Cannot index value with 'str'"):
             Const(31)["str"]
 
+    def test_rotate_left(self):
+        self.assertRepr(Value.cast(256).rotate_left(1), "(cat (slice (const 9'd256) 8:9) (slice (const 9'd256) 0:8))")
+        self.assertRepr(Value.cast(256).rotate_left(7), "(cat (slice (const 9'd256) 2:9) (slice (const 9'd256) 0:2))")
+        self.assertRepr(Value.cast(256).rotate_left(-1), "(cat (slice (const 9'd256) 1:9) (slice (const 9'd256) 0:1))")
+        self.assertRepr(Value.cast(256).rotate_left(-7), "(cat (slice (const 9'd256) 7:9) (slice (const 9'd256) 0:7))")
+
+    def test_rotate_left_wrong(self):
+        with self.assertRaises(TypeError,
+                msg="Rotate amount must be an integer, not 'str'"):
+            Const(31).rotate_left("str")
+
+    def test_rotate_right(self):
+        self.assertRepr(Value.cast(256).rotate_right(1), "(cat (slice (const 9'd256) 1:9) (slice (const 9'd256) 0:1))")
+        self.assertRepr(Value.cast(256).rotate_right(7), "(cat (slice (const 9'd256) 7:9) (slice (const 9'd256) 0:7))")
+        self.assertRepr(Value.cast(256).rotate_right(-1), "(cat (slice (const 9'd256) 8:9) (slice (const 9'd256) 0:8))")
+        self.assertRepr(Value.cast(256).rotate_right(-7), "(cat (slice (const 9'd256) 2:9) (slice (const 9'd256) 0:2))")
+
+    def test_rotate_right_wrong(self):
+        with self.assertRaises(TypeError,
+                msg="Rotate amount must be an integer, not 'str'"):
+            Const(31).rotate_right("str")
 
 class ConstTestCase(FHDLTestCase):
     def test_shape(self):
@@ -888,6 +913,14 @@ class UserValueTestCase(FHDLTestCase):
         self.assertEqual(uv.shape(), unsigned(1))
         self.assertIsInstance(uv.shape(), Shape)
         uv.lowered = 2
+        self.assertEqual(uv.shape(), unsigned(1))
+        self.assertEqual(uv.lower_count, 1)
+
+    def test_lower_to_user_value(self):
+        uv = MockUserValue(MockUserValue(1))
+        self.assertEqual(uv.shape(), unsigned(1))
+        self.assertIsInstance(uv.shape(), Shape)
+        uv.lowered = MockUserValue(2)
         self.assertEqual(uv.shape(), unsigned(1))
         self.assertEqual(uv.lower_count, 1)
 

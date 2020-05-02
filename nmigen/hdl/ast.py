@@ -89,6 +89,12 @@ class Shape(typing.NamedTuple):
             return Shape(width, signed)
         raise TypeError("Object {!r} cannot be used as value shape".format(obj))
 
+    def __repr__(self):
+        if self.signed:
+            return "signed({})".format(self.width)
+        else:
+            return "unsigned({})".format(self.width)
+
 
 # TODO: use dataclasses instead of this hack
 def _Shape___init__(self, width=1, signed=False):
@@ -219,6 +225,13 @@ class Value(metaclass=ABCMeta):
         return Operator(">", [self, other])
     def __ge__(self, other):
         return Operator(">=", [self, other])
+
+    def __abs__(self):
+        width, signed = self.shape()
+        if signed:
+            return Mux(self >= 0, self, -self)
+        else:
+            return self
 
     def __len__(self):
         return self.shape().width
@@ -410,6 +423,42 @@ class Value(metaclass=ABCMeta):
         else:
             return Cat(*matches).any()
 
+    def rotate_left(self, offset):
+        """Rotate left by constant modulo 2**len(self).
+
+        Parameters
+        ----------
+        offset : int
+            Amount to rotate by.
+
+        Returns
+        -------
+        Value, out
+            The input rotated left by offset if offset is positive, else the input rotated right by -offset.
+        """
+        if not isinstance(offset, int):
+            raise TypeError("Rotate amount must be an integer, not {!r}".format(offset))
+        offset %= len(self)
+        return Cat(self[-offset:], self[:-offset]) # meow :3
+
+    def rotate_right(self, offset):
+        """Rotate right by constant modulo 2**len(self).
+
+        Parameters
+        ----------
+        offset : int
+            Amount to rotate by.
+
+        Returns
+        -------
+        Value, out
+            The input rotated right by offset if offset is positive, else the input rotated left by -offset.
+        """
+        if not isinstance(offset, int):
+            raise TypeError("Rotate amount must be an integer, not {!r}".format(offset))
+        offset %= len(self)
+        return Cat(self[offset:], self[:offset])
+
     def eq(self, value):
         """Assignment.
 
@@ -500,7 +549,7 @@ class Const(Value):
         return Shape(self.width, self.signed)
 
     def _rhs_signals(self):
-        return ValueSet()
+        return SignalSet()
 
     def _as_const(self):
         return self.value
@@ -524,7 +573,7 @@ class AnyValue(Value, DUID):
         return Shape(self.width, self.signed)
 
     def _rhs_signals(self):
-        return ValueSet()
+        return SignalSet()
 
 
 @final
@@ -737,10 +786,10 @@ class Cat(Value):
         return Shape(sum(len(part) for part in self.parts))
 
     def _lhs_signals(self):
-        return union((part._lhs_signals() for part in self.parts), start=ValueSet())
+        return union((part._lhs_signals() for part in self.parts), start=SignalSet())
 
     def _rhs_signals(self):
-        return union((part._rhs_signals() for part in self.parts), start=ValueSet())
+        return union((part._rhs_signals() for part in self.parts), start=SignalSet())
 
     def _as_const(self):
         value = 0
@@ -873,8 +922,10 @@ class Signal(Value, DUID):
                 except ValueError:
                     return str(value)
             self.decoder = enum_decoder
+            self._enum_class = decoder
         else:
             self.decoder = decoder
+            self._enum_class = None
 
     # Not a @classmethod because nmigen.compat requires it.
     @staticmethod
@@ -903,10 +954,10 @@ class Signal(Value, DUID):
         return Shape(self.width, self.signed)
 
     def _lhs_signals(self):
-        return ValueSet((self,))
+        return SignalSet((self,))
 
     def _rhs_signals(self):
-        return ValueSet((self,))
+        return SignalSet((self,))
 
     def __repr__(self):
         return "(sig {})".format(self.name)
@@ -937,7 +988,7 @@ class ClockSignal(Value):
         return Shape(1)
 
     def _lhs_signals(self):
-        return ValueSet((self,))
+        return SignalSet((self,))
 
     def _rhs_signals(self):
         raise NotImplementedError("ClockSignal must be lowered to a concrete signal") # :nocov:
@@ -974,7 +1025,7 @@ class ResetSignal(Value):
         return Shape(1)
 
     def _lhs_signals(self):
-        return ValueSet((self,))
+        return SignalSet((self,))
 
     def _rhs_signals(self):
         raise NotImplementedError("ResetSignal must be lowered to a concrete signal") # :nocov:
@@ -1095,11 +1146,13 @@ class ArrayProxy(Value):
         return Shape(width, signed)
 
     def _lhs_signals(self):
-        signals = union((elem._lhs_signals() for elem in self._iter_as_values()), start=ValueSet())
+        signals = union((elem._lhs_signals() for elem in self._iter_as_values()),
+                        start=SignalSet())
         return signals
 
     def _rhs_signals(self):
-        signals = union((elem._rhs_signals() for elem in self._iter_as_values()), start=ValueSet())
+        signals = union((elem._rhs_signals() for elem in self._iter_as_values()),
+                        start=SignalSet())
         return self.index._rhs_signals() | signals
 
     def __repr__(self):
@@ -1137,7 +1190,10 @@ class UserValue(Value):
 
     def _lazy_lower(self):
         if self.__lowered is None:
-            self.__lowered = Value.cast(self.lower())
+            lowered = self.lower()
+            if isinstance(lowered, UserValue):
+                lowered = lowered._lazy_lower()
+            self.__lowered = Value.cast(lowered)
         return self.__lowered
 
     def shape(self):
@@ -1177,7 +1233,7 @@ class Sample(Value):
         return self.value.shape()
 
     def _rhs_signals(self):
-        return ValueSet((self,))
+        return SignalSet((self,))
 
     def __repr__(self):
         return "(sample {!r} @ {}[{}])".format(
@@ -1207,13 +1263,13 @@ class Initial(Value):
     An ``Initial`` signal is ``1`` at the first cycle of model checking, and ``0`` at any other.
     """
     def __init__(self, *, src_loc_at=0):
-        super().__init__(src_loc_at=1 + src_loc_at)
+        super().__init__(src_loc_at=src_loc_at)
 
     def shape(self):
         return Shape(1)
 
     def _rhs_signals(self):
-        return ValueSet((self,))
+        return SignalSet((self,))
 
     def __repr__(self):
         return "(initial)"
@@ -1276,7 +1332,7 @@ class Property(Statement, MustUse):
             self._en.src_loc = self.src_loc
 
     def _lhs_signals(self):
-        return ValueSet((self._en, self._check))
+        return SignalSet((self._en, self._check))
 
     def _rhs_signals(self):
         return self.test._rhs_signals()
@@ -1344,12 +1400,12 @@ class Switch(Statement):
 
     def _lhs_signals(self):
         signals = union((s._lhs_signals() for ss in self.cases.values() for s in ss),
-                        start=ValueSet())
+                        start=SignalSet())
         return signals
 
     def _rhs_signals(self):
         signals = union((s._rhs_signals() for ss in self.cases.values() for s in ss),
-                        start=ValueSet())
+                        start=SignalSet())
         return self.test._rhs_signals() | signals
 
     def __repr__(self):

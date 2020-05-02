@@ -1,5 +1,7 @@
-import inspect
+import os
+import tempfile
 import warnings
+import inspect
 from contextlib import contextmanager
 import itertools
 from vcd import VCDWriter
@@ -91,8 +93,11 @@ class _VCDWaveformWriter(_WaveformWriter):
         trace_names = SignalDict()
         for trace in traces:
             if trace not in signal_names:
-                trace_names[trace] = trace.name
+                trace_names[trace] = {("top", trace.name)}
             self.traces.append(trace)
+
+        if self.vcd_writer is None:
+            return
 
         for signal, names in itertools.chain(signal_names.items(), trace_names.items()):
             if signal.decoder:
@@ -127,7 +132,8 @@ class _VCDWaveformWriter(_WaveformWriter):
                     self.gtkw_names[signal] = (*var_scope, var_name_suffix)
 
     def update(self, timestamp, signal, value):
-        if signal not in self.vcd_vars:
+        vcd_vars = self.vcd_vars.get(signal)
+        if vcd_vars is None:
             return
 
         vcd_timestamp = self.timestamp_to_vcd(timestamp)
@@ -135,11 +141,12 @@ class _VCDWaveformWriter(_WaveformWriter):
             var_value = self.decode_to_vcd(signal, value)
         else:
             var_value = value
-        for vcd_var in self.vcd_vars[signal]:
+        for vcd_var in vcd_vars:
             self.vcd_writer.change(vcd_var, vcd_timestamp, var_value)
 
     def close(self, timestamp):
-        self.vcd_writer.close(self.timestamp_to_vcd(timestamp))
+        if self.vcd_writer is not None:
+            self.vcd_writer.close(self.timestamp_to_vcd(timestamp))
 
         if self.gtkw_save is not None:
             self.gtkw_save.dumpfile(self.vcd_file.name)
@@ -153,7 +160,8 @@ class _VCDWaveformWriter(_WaveformWriter):
                     suffix = ""
                 self.gtkw_save.trace(".".join(self.gtkw_names[signal]) + suffix)
 
-        self.vcd_file.close()
+        if self.vcd_file is not None:
+            self.vcd_file.close()
         if self.gtkw_file is not None:
             self.gtkw_file.close()
 
@@ -243,6 +251,7 @@ class _SimulatorState:
                 if self.waveform_writer is not None:
                     self.waveform_writer.update(self.timestamp,
                         signal_state.signal, signal_state.curr)
+        self.pending.clear()
         return awoken_any
 
     def advance(self):
@@ -356,6 +365,7 @@ class _ValueCompiler(ValueVisitor, _Compiler):
     helpers = {
         "sign": lambda value, sign: value | sign if value & sign else value,
         "zdiv": lambda lhs, rhs: 0 if rhs == 0 else lhs // rhs,
+        "zmod": lambda lhs, rhs: 0 if rhs == 0 else lhs % rhs,
     }
 
     def on_ClockSignal(self, value):
@@ -363,9 +373,6 @@ class _ValueCompiler(ValueVisitor, _Compiler):
 
     def on_ResetSignal(self, value):
         raise NotImplementedError # :nocov:
-
-    def on_Record(self, value):
-        return self(Cat(value.fields.values()))
 
     def on_AnyConst(self, value):
         raise NotImplementedError # :nocov:
@@ -441,6 +448,8 @@ class _RHSValueCompiler(_ValueCompiler):
                 return f"({sign(lhs)} * {sign(rhs)})"
             if value.operator == "//":
                 return f"zdiv({sign(lhs)}, {sign(rhs)})"
+            if value.operator == "%":
+                return f"zmod({sign(lhs)}, {sign(rhs)})"
             if value.operator == "&":
                 return f"({self(lhs)} & {self(rhs)})"
             if value.operator == "|":
@@ -485,7 +494,9 @@ class _RHSValueCompiler(_ValueCompiler):
             part_mask = (1 << len(part)) - 1
             gen_parts.append(f"(({self(part)} & {part_mask}) << {offset})")
             offset += len(part)
-        return f"({' | '.join(gen_parts)})"
+        if gen_parts:
+            return f"({' | '.join(gen_parts)})"
+        return f"0"
 
     def on_Repl(self, value):
         part_mask = (1 << len(value.value)) - 1
@@ -495,7 +506,9 @@ class _RHSValueCompiler(_ValueCompiler):
         for _ in range(value.count):
             gen_parts.append(f"({gen_part} << {offset})")
             offset += len(value.value)
-        return f"({' | '.join(gen_parts)})"
+        if gen_parts:
+            return f"({' | '.join(gen_parts)})"
+        return f"0"
 
     def on_ArrayProxy(self, value):
         index_mask = (1 << len(value.index)) - 1
@@ -756,8 +769,19 @@ class _FragmentCompiler:
                 signal_index = domain_process.context.get_signal(signal)
                 emitter.append(f"slots[{signal_index}].set(next_{signal_index})")
 
+            # There shouldn't be any exceptions raised by the generated code, but if there are
+            # (almost certainly due to a bug in the code generator), use this environment variable
+            # to make backtraces useful.
+            code = emitter.flush()
+            if os.getenv("NMIGEN_pysim_dump"):
+                file = tempfile.NamedTemporaryFile("w", prefix="nmigen_pysim_", delete=False)
+                file.write(code)
+                filename = file.name
+            else:
+                filename = "<string>"
+
             exec_locals = {"slots": domain_process.context.slots, **_ValueCompiler.helpers}
-            exec(emitter.flush(), exec_locals)
+            exec(compile(code, filename, "exec"), exec_locals)
             domain_process.run = exec_locals["run"]
 
             processes.add(domain_process)
@@ -996,11 +1020,14 @@ class Simulator:
             # Behave correctly if the process is added after the clock signal is manipulated, or if
             # its reset state is high.
             initial = (yield domain.clk)
+            steps = (
+                domain.clk.eq(~initial),
+                Delay(half_period),
+                domain.clk.eq(initial),
+                Delay(half_period),
+            )
             while True:
-                yield domain.clk.eq(~initial)
-                yield Delay(half_period)
-                yield domain.clk.eq(initial)
-                yield Delay(half_period)
+                yield from iter(steps)
         self._add_coroutine_process(clk_process, default_cmd=None)
         self._clocked.add(domain)
 

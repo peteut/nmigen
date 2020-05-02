@@ -1,5 +1,6 @@
 import re
 import subprocess
+import itertools
 
 from .._toolchain import require_tool
 from . import rtlil
@@ -15,7 +16,9 @@ class YosysError(Exception):
 def _yosys_version():
     yosys_path = require_tool("yosys")
     version = subprocess.check_output([yosys_path, "-V"], encoding="utf-8")
-    m = re.match(r"^Yosys ([\d.]+)(?:\+(\d+))?", version)
+    # If Yosys is built with Verific, then Verific license information is printed first.
+    # See below for details.
+    m = re.search(r"^Yosys ([\d.]+)(?:\+(\d+))?", version, flags=re.M)
     tag, offset = m[1], m[2] or 0
     return tuple(map(int, tag.split("."))), offset
 
@@ -63,6 +66,13 @@ write_verilog -norename {write_verilog_opts}
     if popen.returncode:
         raise YosysError(error.strip())
     else:
+        # If Yosys is built with an evaluation version of Verific, then Verific license information 
+        # is printed first. It consists of empty lines and lines starting with `--`, which are not
+        # valid at the start of a Verilog file, and thus may be reliably removed.
+        verilog_text = "\n".join(itertools.dropwhile(
+            lambda x: x == "" or x.startswith("--"),
+            verilog_text.splitlines()
+        ))
         return verilog_text
 
 

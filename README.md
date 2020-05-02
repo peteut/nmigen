@@ -36,8 +36,12 @@ nMigen is *not* a "Python-to-FPGA" conventional high level synthesis (HLS) tool.
 
 nMigen requires Python 3.6 (or newer), [Yosys][] 0.9 (or newer), as well as a device-specific toolchain.
 
-    pip install git+https://github.com/m-labs/nmigen.git
-    pip install git+https://github.com/m-labs/nmigen-boards.git
+First, install Yosys, either using your system package manager, or [from source][yosyssrc]. Then, install nMigen and pinouts for many common FPGA developer boards:
+
+    pip install git+https://github.com/nmigen/nmigen.git
+    pip install git+https://github.com/nmigen/nmigen-boards.git
+
+[yosyssrc]: https://github.com/yosysHQ/yosys/#setup
 
 ### Introduction
 
@@ -80,7 +84,6 @@ nMigen is released under the very permissive two-clause BSD license. Under the t
 
 Even though we do not require you to do so, these things are awesome, so please do them if possible:
   * tell us that you are using nMigen
-  * put the [nMigen logo](doc/nmigen_logo.svg) on the page of a product using it, with a link to https://nmigen.org
   * cite nMigen in publications related to research it has helped
   * send us feedback and suggestions for improvements
   * send us bug reports when something goes wrong

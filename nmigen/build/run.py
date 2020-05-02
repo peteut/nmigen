@@ -95,11 +95,8 @@ class BuildPlan:
             if run_script:
                 if sys.platform.startswith("win32"):
                     # Without "call", "cmd /c {}.bat" will return 0.
-                    # See https://stackoverflow.com/a/30736987 for a detailed
-                    # explanation of why, including disassembly/decompilation
-                    # of relevant code in cmd.exe.
-                    # Running the script manually from a command prompt is
-                    # unaffected- i.e. "call" is not required.
+                    # See https://stackoverflow.com/a/30736987 for a detailed explanation of why.
+                    # Running the script manually from a command prompt is unaffected.
                     subprocess.check_call(["cmd", "/c", "call {}.bat".format(self.script)])
                 else:
                     subprocess.check_call(["sh", "{}.sh".format(self.script)])
@@ -141,7 +138,8 @@ class BuildProducts(metaclass=ABCMeta):
                 # others if it's still open within the Python process, so we close it and delete
                 # it manually.
                 with closing(tempfile.NamedTemporaryFile(
-                    prefix="nmigen_", suffix="_" + filename, delete=False)) as file:
+                    prefix="nmigen_",
+                    suffix="_" + os.path.basename(filename), delete=False)) as file:
                     files.append(file)
                     file.write(self.get(filename))
 
