@@ -605,7 +605,7 @@ class Xilinx7SeriesPlatform(TemplatedPlatform):
             "xpm_cdc_async_rst",
             p_DEST_SYNC_FF=dest_sync_ff,
             p_RST_ACTIVE_HIGH={"pos": 1, "neg": 0}[async_ff_sync._edge],
-            o_dest_arst=ResetSignal(async_ff_sync._o_domain),
+            o_dest_arst=async_ff_sync.o,
             i_dest_clk=ClockSignal(async_ff_sync._o_domain),
             i_src_arst=async_ff_sync.i
         )
