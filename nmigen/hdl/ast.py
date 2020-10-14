@@ -32,7 +32,7 @@ class DUID:
         DUID.__next_uid += 1
 
 
-class Shape(typing.NamedTuple):
+class Shape:
     """Bit width and signedness of a value.
 
     A ``Shape`` can be constructed using:
@@ -55,8 +55,15 @@ class Shape(typing.NamedTuple):
     signed : bool
         If ``False``, the value is unsigned. If ``True``, the value is signed two's complement.
     """
-    width:  int  = 1
-    signed: bool = False
+    def __init__(self, width=1, signed=False):
+        if not isinstance(width, int) or width < 0:
+            raise TypeError("Width must be a non-negative integer, not {!r}"
+                            .format(width))
+        self.width = width
+        self.signed = signed
+
+    def __iter__(self):
+        return iter((self.width, self.signed))
 
     @staticmethod
     def cast(obj, *, src_loc_at=0):
@@ -95,13 +102,20 @@ class Shape(typing.NamedTuple):
         else:
             return "unsigned({})".format(self.width)
 
-
-# TODO: use dataclasses instead of this hack
-def _Shape___init__(self, width=1, signed=False):
-    if not isinstance(width, int) or width < 0:
-        raise TypeError("Width must be a non-negative integer, not {!r}"
-                        .format(width))
-Shape.__init__ = _Shape___init__
+    def __eq__(self, other):
+        if isinstance(other, tuple) and len(other) == 2:
+            width, signed = other
+            if isinstance(width, int) and isinstance(signed, bool):
+                return self.width == width and self.signed == signed
+            else:
+                raise TypeError("Shapes may be compared with other Shapes and (int, bool) tuples, "
+                        "not {!r}"
+                        .format(other))
+        if not isinstance(other, Shape):
+            raise TypeError("Shapes may be compared with other Shapes and (int, bool) tuples, "
+                    "not {!r}"
+                    .format(other))
+        return self.width == other.width and self.signed == other.signed
 
 
 def unsigned(width):
@@ -135,7 +149,7 @@ class Value(metaclass=ABCMeta):
         self.src_loc = tracer.get_src_loc(1 + src_loc_at)
 
     def __bool__(self):
-        raise TypeError("Attempted to convert nMigen value to boolean")
+        raise TypeError("Attempted to convert nMigen value to Python boolean")
 
     def __invert__(self):
         return Operator("~", [self])
@@ -184,7 +198,7 @@ class Value(metaclass=ABCMeta):
             # Neither Python nor HDLs implement shifts by negative values; prohibit any shifts
             # by a signed value to make sure the shift amount can always be interpreted as
             # an unsigned value.
-            raise NotImplementedError("Shift by a signed value is not supported")
+            raise TypeError("Shift amount must be unsigned")
     def __lshift__(self, other):
         other = Value.cast(other)
         other.__check_shamt()
@@ -240,7 +254,7 @@ class Value(metaclass=ABCMeta):
         n = len(self)
         if isinstance(key, int):
             if key not in range(-n, n):
-                raise IndexError("Cannot index {} bits into {}-bit value".format(key, n))
+                raise IndexError(f"Index {key} is out of bounds for a {n}-bit value")
             if key < 0:
                 key += n
             return Slice(self, key, key + 1)
@@ -330,7 +344,7 @@ class Value(metaclass=ABCMeta):
 
         Parameters
         ----------
-        offset : Value, in
+        offset : Value, int
             Index of first selected bit.
         width : int
             Number of selected bits.
@@ -353,7 +367,7 @@ class Value(metaclass=ABCMeta):
 
         Parameters
         ----------
-        offset : Value, in
+        offset : Value, int
             Index of first selected word.
         width : int
             Number of selected bits.
@@ -423,41 +437,85 @@ class Value(metaclass=ABCMeta):
         else:
             return Cat(*matches).any()
 
-    def rotate_left(self, offset):
-        """Rotate left by constant modulo 2**len(self).
+    def shift_left(self, amount):
+        """Shift left by constant amount.
 
         Parameters
         ----------
-        offset : int
+        amount : int
+            Amount to shift by.
+
+        Returns
+        -------
+        Value, out
+            If the amount is positive, the input shifted left. Otherwise, the input shifted right.
+        """
+        if not isinstance(amount, int):
+            raise TypeError("Shift amount must be an integer, not {!r}".format(amount))
+        if amount < 0:
+            return self.shift_right(-amount)
+        if self.shape().signed:
+            return Cat(Const(0, amount), self).as_signed()
+        else:
+            return Cat(Const(0, amount), self) # unsigned
+
+    def shift_right(self, amount):
+        """Shift right by constant amount.
+
+        Parameters
+        ----------
+        amount : int
+            Amount to shift by.
+
+        Returns
+        -------
+        Value, out
+            If the amount is positive, the input shifted right. Otherwise, the input shifted left.
+        """
+        if not isinstance(amount, int):
+            raise TypeError("Shift amount must be an integer, not {!r}".format(amount))
+        if amount < 0:
+            return self.shift_left(-amount)
+        if self.shape().signed:
+            return self[amount:].as_signed()
+        else:
+            return self[amount:] # unsigned
+
+    def rotate_left(self, amount):
+        """Rotate left by constant amount.
+
+        Parameters
+        ----------
+        amount : int
             Amount to rotate by.
 
         Returns
         -------
         Value, out
-            The input rotated left by offset if offset is positive, else the input rotated right by -offset.
+            If the amount is positive, the input rotated left. Otherwise, the input rotated right.
         """
-        if not isinstance(offset, int):
-            raise TypeError("Rotate amount must be an integer, not {!r}".format(offset))
-        offset %= len(self)
-        return Cat(self[-offset:], self[:-offset]) # meow :3
+        if not isinstance(amount, int):
+            raise TypeError("Rotate amount must be an integer, not {!r}".format(amount))
+        amount %= len(self)
+        return Cat(self[-amount:], self[:-amount]) # meow :3
 
-    def rotate_right(self, offset):
-        """Rotate right by constant modulo 2**len(self).
+    def rotate_right(self, amount):
+        """Rotate right by constant amount.
 
         Parameters
         ----------
-        offset : int
+        amount : int
             Amount to rotate by.
 
         Returns
         -------
         Value, out
-            The input rotated right by offset if offset is positive, else the input rotated left by -offset.
+            If the amount is positive, the input rotated right. Otherwise, the input rotated right.
         """
-        if not isinstance(offset, int):
-            raise TypeError("Rotate amount must be an integer, not {!r}".format(offset))
-        offset %= len(self)
-        return Cat(self[offset:], self[:offset])
+        if not isinstance(amount, int):
+            raise TypeError("Rotate amount must be an integer, not {!r}".format(amount))
+        amount %= len(self)
+        return Cat(self[amount:], self[:amount])
 
     def eq(self, value):
         """Assignment.
@@ -1139,11 +1197,27 @@ class ArrayProxy(Value):
         return (Value.cast(elem) for elem in self.elems)
 
     def shape(self):
-        width, signed = 0, False
+        unsigned_width = signed_width = 0
+        has_unsigned = has_signed = False
         for elem_width, elem_signed in (elem.shape() for elem in self._iter_as_values()):
-            width  = max(width, elem_width + elem_signed)
-            signed = max(signed, elem_signed)
-        return Shape(width, signed)
+            if elem_signed:
+                has_signed = True
+                signed_width = max(signed_width, elem_width)
+            else:
+                has_unsigned = True
+                unsigned_width = max(unsigned_width, elem_width)
+        # The shape of the proxy must be such that it preserves the mathematical value of the array
+        # elements. I.e., shape-wise, an array proxy must be identical to an equivalent mux tree.
+        # To ensure this holds, if the array contains both signed and unsigned values, make sure
+        # that every unsigned value is zero-extended by at least one bit.
+        if has_signed and has_unsigned and unsigned_width >= signed_width:
+            # Array contains both signed and unsigned values, and at least one of the unsigned
+            # values won't be zero-extended otherwise.
+            return signed(unsigned_width + 1)
+        else:
+            # Array contains values of the same signedness, or else all of the unsigned values
+            # are zero-extended.
+            return Shape(max(unsigned_width, signed_width), has_signed)
 
     def _lhs_signals(self):
         signals = union((elem._lhs_signals() for elem in self._iter_as_values()),

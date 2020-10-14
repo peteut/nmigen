@@ -1,79 +1,50 @@
-import re
-import subprocess
-import itertools
-
-from .._toolchain import require_tool
+from .._toolchain.yosys import *
 from . import rtlil
 
 
 __all__ = ["YosysError", "convert", "convert_fragment"]
 
 
-class YosysError(Exception):
-    pass
+def _convert_rtlil_text(rtlil_text, *, strip_internal_attrs=False, write_verilog_opts=()):
+    # this version requirement needs to be synchronized with the one in setup.py!
+    yosys = find_yosys(lambda ver: ver >= (0, 9))
+    yosys_version = yosys.version()
 
+    script = []
+    script.append("read_ilang <<rtlil\n{}\nrtlil".format(rtlil_text))
 
-def _yosys_version():
-    yosys_path = require_tool("yosys")
-    version = subprocess.check_output([yosys_path, "-V"], encoding="utf-8")
-    # If Yosys is built with Verific, then Verific license information is printed first.
-    # See below for details.
-    m = re.search(r"^Yosys ([\d.]+)(?:\+(\d+))?", version, flags=re.M)
-    tag, offset = m[1], m[2] or 0
-    return tuple(map(int, tag.split("."))), offset
+    if yosys_version >= (0, 9, 3527):
+        # Yosys >=0.9+3527 (since commit 656ee70f) supports the `-nomux` option for the `proc`
+        # script pass. Because the individual `proc_*` passes are not a stable interface,
+        # `proc -nomux` is used instead, if available.
+        script.append("delete w:$verilog_initial_trigger")
+        script.append("proc -nomux")
+    else:
+        # On earlier versions, use individual `proc_*` passes; this is a known range of Yosys
+        # versions and we know it's compatible with what nMigen does.
+        script.append("proc_init")
+        script.append("proc_arst")
+        script.append("proc_dff")
+        script.append("proc_clean")
+    script.append("memory_collect")
 
-
-def _convert_rtlil_text(rtlil_text, *,
-                        strip_internal_attrs=False, write_verilog_opts=()):
-    version, offset = _yosys_version()
-    if version < (0, 9):
-        raise YosysError("Yosys {}.{} is not supported".format(*version))
-
-    attr_map = []
     if strip_internal_attrs:
+        attr_map = []
         attr_map.append("-remove generator")
         attr_map.append("-remove top")
         attr_map.append("-remove src")
         attr_map.append("-remove nmigen.hierarchy")
         attr_map.append("-remove nmigen.decoding")
+        script.append("attrmap {}".format(" ".join(attr_map)))
+        script.append("attrmap -modattr {}".format(" ".join(attr_map)))
 
-    script = """
-# Convert nMigen's RTLIL to readable Verilog.
-read_ilang <<rtlil
-{}
-rtlil
-{prune}delete w:$verilog_initial_trigger
-{prune}proc_prune
-proc_init
-proc_arst
-proc_dff
-proc_clean
-memory_collect
-attrmap {attr_map}
-attrmap -modattr {attr_map}
-write_verilog -norename {write_verilog_opts}
-""".format(rtlil_text,
-           prune="# " if version == (0, 9) and offset == 0 else "",
-           attr_map=" ".join(attr_map),
-           write_verilog_opts=" ".join(write_verilog_opts))
+    script.append("write_verilog -norename {}".format(" ".join(write_verilog_opts)))
 
-    popen = subprocess.Popen([require_tool("yosys"), "-q", "-"],
-                             stdin=subprocess.PIPE,
-                             stdout=subprocess.PIPE,
-                             stderr=subprocess.PIPE,
-                             encoding="utf-8")
-    verilog_text, error = popen.communicate(script)
-    if popen.returncode:
-        raise YosysError(error.strip())
-    else:
-        # If Yosys is built with an evaluation version of Verific, then Verific license information 
-        # is printed first. It consists of empty lines and lines starting with `--`, which are not
-        # valid at the start of a Verilog file, and thus may be reliably removed.
-        verilog_text = "\n".join(itertools.dropwhile(
-            lambda x: x == "" or x.startswith("--"),
-            verilog_text.splitlines()
-        ))
-        return verilog_text
+    return yosys.run(["-q", "-"], "\n".join(script),
+        # At the moment, Yosys always shows a warning indicating that not all processes can be
+        # translated to Verilog. We carefully emit only the processes that *can* be translated, and
+        # squash this warning. Once Yosys' write_verilog pass is fixed, we should remove this.
+        ignore_warnings=True)
 
 
 def convert_fragment(*args, strip_internal_attrs=False, **kwargs):

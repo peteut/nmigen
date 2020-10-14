@@ -2,17 +2,18 @@
 __pycache__/
 /*.egg-info
 /.eggs
+/dist
 
 # coverage
 /.coverage
 /htmlcov
 
 # tests
-**/test/spec_*/
+/tests/spec_*/
 *.vcd
 *.gtkw
 
 # misc user-created
-*.il
-*.v
+/*.il
+/*.v
 /build

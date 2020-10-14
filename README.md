@@ -17,35 +17,21 @@ To address those issues, we have developed the *nMigen FHDL*, a library that rep
 
 Other nMigen libraries are built on FHDL and provide various tools and logic cores. nMigen also contains a simulator that allows test benches to be written in Python.
 
-See the [doc/](doc/) folder for more technical information.
+nMigen is based on Migen, a similar Python-based hardware description language. Although Migen works very well in production, its design could be improved in many fundamental ways, and nMigen reimplements Migen concepts from scratch to do so. nMigen also provides an extensive [compatibility layer](#migration-from-migen) that makes it possible to build and simulate most Migen designs unmodified, as well as integrate modules written for Migen and nMigen.
 
-nMigen is based on [Migen][], a hardware description language developed by [M-Labs][]. Although Migen works very well in production, its design could be improved in many fundamental ways, and nMigen reimplements Migen concepts from scratch to do so. nMigen also provides an extensive [compatibility layer](#migration-from-migen) that makes it possible to build and simulate most Migen designs unmodified, as well as integrate modules written for Migen and nMigen.
+The development of nMigen has been supported by [SymbioticEDA][] and [LambdaConcept][].
 
-The development of nMigen has been supported by [SymbioticEDA][], [LambdaConcept][] and [M-Labs][].
-
-[migen]: https://m-labs.hk/migen
 [yosys]: http://www.clifford.at/yosys/
 [m-labs]: https://m-labs.hk
 [lambdaconcept]: http://lambdaconcept.com/
 
-### HLS?
+### Introduction
 
-nMigen is *not* a "Python-to-FPGA" conventional high level synthesis (HLS) tool. It will *not* take a Python program as input and generate a hardware implementation of it. In nMigen, the Python program is executed by a regular Python interpreter, and it emits explicit statements in the FHDL domain-specific language.  Writing a conventional HLS tool that uses nMigen as an internal component might be a good idea, on the other hand :)
+See the [Introduction](https://nmigen.info/nmigen/latest/intro.html) section of the documentation.
 
 ### Installation
 
-nMigen requires Python 3.6 (or newer), [Yosys][] 0.9 (or newer), as well as a device-specific toolchain.
-
-First, install Yosys, either using your system package manager, or [from source][yosyssrc]. Then, install nMigen and pinouts for many common FPGA developer boards:
-
-    pip install git+https://github.com/nmigen/nmigen.git
-    pip install git+https://github.com/nmigen/nmigen-boards.git
-
-[yosyssrc]: https://github.com/yosysHQ/yosys/#setup
-
-### Introduction
-
-TBD
+See the [Installation](https://nmigen.info/nmigen/latest/install.html) section of the documentation.
 
 ### Supported devices
 
@@ -53,6 +39,7 @@ nMigen can be used to target any FPGA or ASIC process that accepts behavioral Ve
 
   * Lattice iCE40 (toolchains: **Yosys+nextpnr**, LSE-iCECube2, Synplify-iCECube2);
   * Lattice MachXO2 (toolchains: Diamond);
+  * Lattice MachXO3L (toolchains: Diamond);
   * Lattice ECP5 (toolchains: **Yosys+nextpnr**, Diamond);
   * Xilinx Spartan 3A (toolchains: ISE);
   * Xilinx Spartan 6 (toolchains: ISE);
@@ -62,9 +49,9 @@ nMigen can be used to target any FPGA or ASIC process that accepts behavioral Ve
 
 FOSS toolchains are listed in **bold**.
 
-### Migration from [Migen][]
+### Migration from Migen
 
-If you are already familiar with [Migen][], the good news is that nMigen provides a comprehensive Migen compatibility layer! An existing Migen design can be synthesized and simulated with nMigen in three steps:
+If you are already familiar with Migen, the good news is that nMigen provides a comprehensive Migen compatibility layer! An existing Migen design can be synthesized and simulated with nMigen in three steps:
 
   1. Replace all `from migen import <...>` statements with `from nmigen.compat import <...>`.
   2. Replace every explicit mention of the default `sys` clock domain with the new default `sync` clock domain. E.g. `ClockSignal("sys")` is changed to `ClockSignal("sync")`.
@@ -80,15 +67,4 @@ nMigen has a dedicated IRC channel, [#nmigen at freenode.net](https://webchat.fr
 
 ### License
 
-nMigen is released under the very permissive two-clause BSD license. Under the terms of this license, you are authorized to use nMigen for closed-source proprietary designs.
-
-Even though we do not require you to do so, these things are awesome, so please do them if possible:
-  * tell us that you are using nMigen
-  * cite nMigen in publications related to research it has helped
-  * send us feedback and suggestions for improvements
-  * send us bug reports when something goes wrong
-  * send us the modifications and improvements you have done to nMigen as pull requests on GitHub
-
-See LICENSE file for full copyright and license info.
-
-  "Electricity! It's like magic!"
+nMigen is released under the very permissive [two-clause BSD license](LICENSE.txt). Under the terms of this license, you are authorized to use nMigen for closed-source proprietary designs.

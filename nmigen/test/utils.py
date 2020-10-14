@@ -14,6 +14,13 @@ from ..back import rtlil
 from .._toolchain import require_tool
 
 
+warnings.warn("nmigen.test.utils is an internal utility module that has several design flaws "
+              "and was never intended as a public API; it will be removed in nmigen 0.4. "
+              "if you are using FHDLTestCase, include its implementation in your codebase. "
+              "see also nmigen/nmigen#487",
+              DeprecationWarning, stacklevel=2)
+
+
 __all__ = ["FHDLTestCase"]
 
 
@@ -27,31 +34,6 @@ class FHDLTestCase(unittest.TestCase):
             repr_str = re.sub(r"\) (?=\))", ")", repr_str)
             return repr_str.strip()
         self.assertEqual(prepare_repr(repr(obj)), prepare_repr(repr_str))
-
-    @contextmanager
-    def assertRaises(self, exception, msg=None):
-        with super().assertRaises(exception) as cm:
-            yield
-        if msg is not None:
-            # WTF? unittest.assertRaises is completely broken.
-            self.assertEqual(str(cm.exception), msg)
-
-    @contextmanager
-    def assertRaisesRegex(self, exception, regex=None):
-        with super().assertRaises(exception) as cm:
-            yield
-        if regex is not None:
-            # unittest.assertRaisesRegex also seems broken...
-            self.assertRegex(str(cm.exception), regex)
-
-    @contextmanager
-    def assertWarns(self, category, msg=None):
-        with warnings.catch_warnings(record=True) as warns:
-            yield
-        self.assertEqual(len(warns), 1)
-        self.assertEqual(warns[0].category, category)
-        if msg is not None:
-            self.assertEqual(str(warns[0].message), msg)
 
     def assertFormal(self, spec, mode="bmc", depth=1):
         caller, *_ = traceback.extract_stack(limit=2)

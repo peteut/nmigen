@@ -23,11 +23,28 @@ _escape_map = str.maketrans({
 })
 
 
+def signed(value):
+    if isinstance(value, str):
+        return False
+    elif isinstance(value, int):
+        return value < 0
+    elif isinstance(value, ast.Const):
+        return value.signed
+    else:
+        assert False, "Invalid constant {!r}".format(value)
+
+
 def const(value):
     if isinstance(value, str):
         return "\"{}\"".format(value.translate(_escape_map))
     elif isinstance(value, int):
-        return "{:d}".format(value)
+        if value in range(0, 2**31-1):
+            return "{:d}".format(value)
+        else:
+            # This code path is only used for Instances, where Verilog-like behavior is desirable.
+            # Verilog ensures that integers with unspecified width are 32 bits wide or more.
+            width = max(32, bits_for(value))
+            return const(ast.Const(value, width))
     elif isinstance(value, ast.Const):
         value_twos_compl = value.value & ((1 << value.width) - 1)
         return "{}'{:0{}b}".format(value.width, value_twos_compl, value.width)
@@ -115,10 +132,10 @@ class _ModuleBuilder(_Namer, _BufferedBuilder, _AttrBuilder):
 
     def wire(self, width, port_id=None, port_kind=None, name=None, attrs={}, src=""):
         # Very large wires are unlikely to work. Verilog 1364-2005 requires the limit on vectors
-        # to be at least 2**16 bits, and Yosys 0.9 breaks on wires of more than 2**32 bits, so
-        # those numbers are our hard bounds. Use 2**24 as the arbitrary boundary beyond which
-        # downstream bugs are more likely than not.
-        if width > 2 ** 24:
+        # to be at least 2**16 bits, and Yosys 0.9 cannot read RTLIL with wires larger than 2**32
+        # bits. In practice, wires larger than 2**16 bits, although accepted, cause performance
+        # problems without an immediately visible cause, so conservatively limit wire size.
+        if width > 2 ** 16:
             raise ImplementationLimit("Wire created at {} is {} bits wide, which is unlikely to "
                                       "synthesize correctly"
                                       .format(src or "unknown location", width))
@@ -149,6 +166,9 @@ class _ModuleBuilder(_Namer, _BufferedBuilder, _AttrBuilder):
             if isinstance(value, float):
                 self._append("    parameter real \\{} \"{!r}\"\n",
                              param, value)
+            elif signed(value):
+                self._append("    parameter signed \\{} {}\n",
+                             param, const(value))
             else:
                 self._append("    parameter \\{} {}\n",
                              param, const(value))
@@ -538,7 +558,7 @@ class _RHSValueCompiler(_ValueCompiler):
             self.s.rtlil.cell("$mux", ports={
                 "\\A": divmod_res,
                 "\\B": self(ast.Const(0, ast.Shape(res_bits, res_sign))),
-                "\\S": self(lhs == 0),
+                "\\S": self(rhs == 0),
                 "\\Y": res,
             }, params={
                 "WIDTH": res_bits
@@ -811,6 +831,11 @@ def _convert_fragment(builder, fragment, name_map, hierarchy):
         verilog_trigger = None
         verilog_trigger_sync_emitted = False
 
+        # If the fragment is completely empty, add a dummy wire to it, or Yosys will interpret
+        # it as a black box by default (when read as Verilog).
+        if not fragment.ports and not fragment.statements and not fragment.subfragments:
+            module.wire(1, name="$empty_module_filler")
+
         # Register all signals driven in the current fragment. This must be done first, as it
         # affects further codegen; e.g. whether \sig$next signals will be generated and used.
         for domain, signal in fragment.iter_drivers():
@@ -835,9 +860,6 @@ def _convert_fragment(builder, fragment, name_map, hierarchy):
         # name) names.
         memories = OrderedDict()
         for subfragment, sub_name in fragment.subfragments:
-            if not subfragment.ports:
-                continue
-
             if sub_name is None:
                 sub_name = module.anonymous()
 
