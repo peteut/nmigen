@@ -1,9 +1,5 @@
 # nMigen
 
-[![Build Status](https://travis-ci.org/peteut/nmigen.svg)](
-https://travis-ci.org/peteut/nmigen)
-[![Coverage Status](https://coveralls.io/repos/peteut/nmigen/badge.svg)](
-https://coveralls.io/r/peteut/nmigen)
 [![codecov](https://codecov.io/gh/peteut/nmigen/graph/badge.svg)](
 https://codecov.io/gh/peteut/nmigen)
 
