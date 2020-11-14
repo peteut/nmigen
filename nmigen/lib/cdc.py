@@ -208,7 +208,6 @@ class ResetSynchronizer(Elaboratable):
 
         self._max_input_delay = max_input_delay
 
-    @_dispatchable("get_reset_sync")
     def elaborate(self, platform):
         return AsyncFFSynchronizer(self.arst, ResetSignal(self._domain), o_domain=self._domain,
                 stages=self._stages, max_input_delay=self._max_input_delay)
