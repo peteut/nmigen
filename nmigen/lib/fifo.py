@@ -369,7 +369,7 @@ class AsyncFIFO(Elaboratable, FIFOInterface):
         produce_dec = m.submodules.produce_dec = \
             GrayDecoder(self._ctr_bits)
         m.d.comb += produce_dec.i.eq(produce_r_gry),
-        m.d[self._r_domain] += produce_r_bin.eq(produce_dec.o)
+        m.d.comb += produce_r_bin.eq(produce_dec.o)
 
         w_full  = Signal()
         r_empty = Signal()
@@ -380,8 +380,8 @@ class AsyncFIFO(Elaboratable, FIFOInterface):
             r_empty.eq(consume_r_gry == produce_r_gry),
         ]
 
-        m.d[self._w_domain] += self.w_level.eq((produce_w_bin - consume_w_bin)[:self._ctr_bits-1])
-        m.d[self._r_domain] += self.r_level.eq((produce_r_bin - consume_r_bin)[:self._ctr_bits-1])
+        m.d[self._w_domain] += self.w_level.eq((produce_w_bin - consume_w_bin))
+        m.d.comb += self.r_level.eq((produce_r_bin - consume_r_bin))
 
         storage = Memory(width=self.width, depth=self.depth)
         w_port  = m.submodules.w_port = storage.write_port(domain=self._w_domain)
@@ -506,15 +506,21 @@ class AsyncFIFOBuffered(Elaboratable, FIFOInterface):
             fifo.w_data.eq(self.w_data),
             self.w_rdy.eq(fifo.w_rdy),
             fifo.w_en.eq(self.w_en),
-            self.w_level.eq(fifo.w_level),
         ]
+
+        r_consume_buffered = Signal()
+        m.d.comb += r_consume_buffered.eq(self.r_rdy - self.r_en)
+        m.d[self._r_domain] += self.r_level.eq(fifo.r_level + r_consume_buffered)
+
+        w_consume_buffered = Signal()
+        m.submodules.consume_buffered_cdc = AsyncFFSynchronizer(r_consume_buffered, w_consume_buffered, o_domain=self._w_domain)
+        m.d.comb += self.w_level.eq(fifo.w_level + w_consume_buffered)
 
         with m.If(self.r_en | ~self.r_rdy):
             m.d[self._r_domain] += [
                 self.r_data.eq(fifo.r_data),
                 self.r_rdy.eq(fifo.r_rdy),
                 self.r_rst.eq(fifo.r_rst),
-                self.r_level.eq(fifo.r_level),
             ]
             m.d.comb += [
                 fifo.r_en.eq(1)

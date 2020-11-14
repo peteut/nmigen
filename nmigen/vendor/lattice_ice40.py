@@ -124,6 +124,7 @@ class LatticeICE40Platform(TemplatedPlatform):
                 read_ilang {{file}}
             {% endfor %}
             read_ilang {{name}}.il
+            delete w:$verilog_initial_trigger
             {{get_override("script_after_read")|default("# (script_after_read placeholder)")}}
             synth_ice40 {{get_override("synth_opts")|options}} -top {{name}}
             {{get_override("script_after_synth")|default("# (script_after_synth placeholder)")}}
@@ -379,7 +380,7 @@ class LatticeICE40Platform(TemplatedPlatform):
                 m.submodules += Instance("SB_HFOSC",
                                          i_CLKHFEN=1,
                                          i_CLKHFPU=1,
-                                         p_CLKHF_DIV="0b{0:b}".format(self.hfosc_div),
+                                         p_CLKHF_DIV="0b{0:02b}".format(self.hfosc_div),
                                          o_CLKHF=clk_i)
                 delay = int(100e-6 * self.default_clk_frequency)
             # Internal low-speed clock: 10 KHz.

@@ -28,7 +28,12 @@ class FHDLTestCase(unittest.TestCase):
         self.assertEqual(prepare_repr(repr(obj)), prepare_repr(repr_str))
 
     def assertFormal(self, spec, mode="bmc", depth=1):
-        caller, *_ = traceback.extract_stack(limit=2)
+        stack = traceback.extract_stack()
+        for frame in reversed(stack):
+            if os.path.dirname(__file__) not in frame.filename:
+                break
+            caller = frame
+
         spec_root, _ = os.path.splitext(caller.filename)
         spec_dir = os.path.dirname(spec_root)
         spec_name = "{}_{}".format(
@@ -41,7 +46,7 @@ class FHDLTestCase(unittest.TestCase):
             shutil.rmtree(os.path.join(spec_dir, spec_name))
 
         if mode == "hybrid":
-            # A mix of BMC and k-induction, as per personal communication with Clifford Wolf.
+            # A mix of BMC and k-induction, as per personal communication with Claire Wolf.
             script = "setattr -unset init w:* a:nmigen.sample_reg %d"
             mode   = "bmc"
         else:
@@ -69,9 +74,10 @@ class FHDLTestCase(unittest.TestCase):
             script=script,
             rtlil=rtlil.convert(Fragment.get(spec, platform="formal"))
         )
-        with subprocess.Popen([require_tool("sby"), "-f", "-d", spec_name], cwd=spec_dir,
-                              universal_newlines=True,
-                              stdin=subprocess.PIPE, stdout=subprocess.PIPE) as proc:
+        with subprocess.Popen(
+                [require_tool("sby"), "-f", "-d", spec_name],
+                cwd=spec_dir, env={**os.environ, "PYTHONWARNINGS":"ignore"},
+                universal_newlines=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE) as proc:
             stdout, stderr = proc.communicate(config)
             if proc.returncode != 0:
                 self.fail("Formal verification failed:\n" + stdout)
